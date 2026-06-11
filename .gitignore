@@ -6,3 +6,6 @@ node_modules/
 dist/
 .pytest_cache/
 *.egg-info/
+
+# 临时测试样本图片
+backend/sample_*.png
