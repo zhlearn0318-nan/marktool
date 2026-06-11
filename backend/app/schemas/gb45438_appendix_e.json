@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GB45438-2025 Appendix E AIGC Metadata (approximate)",
+  "type": "object",
+  "required": ["Label", "ContentProducer", "ProduceID"],
+  "properties": {
+    "Label": { "type": "string", "minLength": 1 },
+    "ContentProducer": { "type": "string", "minLength": 1 },
+    "ProduceID": { "type": "string", "minLength": 1 },
+    "ContentPropagator": { "type": "string" },
+    "PropagateID": { "type": "string" },
+    "ReservedCode1": { "type": "string" },
+    "ReservedCode2": { "type": "string" }
+  },
+  "additionalProperties": true
+}
