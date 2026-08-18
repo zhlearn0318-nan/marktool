@@ -157,3 +157,9 @@ sample_unmarked.png -> 不合规
 ## 注意事项
 
 > GB 45438-2025 附录 E 的 AIGC JSON 结构按公开信息近似定义，待对照标准原文校准。
+
+---
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。

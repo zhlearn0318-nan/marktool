@@ -9,3 +9,10 @@ dist/
 
 # 临时测试样本图片
 backend/sample_*.png
+
+# 本地开发配置与运行产物
+.claude/
+*.log
+/output.md
+/启动网页.bat
+/第三章_产品与研发(1).docx
