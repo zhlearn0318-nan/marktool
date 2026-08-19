@@ -16,3 +16,9 @@ backend/sample_*.png
 /output.md
 /启动网页.bat
 /第三章_产品与研发(1).docx
+
+# 本地编号唯一性登记库
+backend/data/
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm

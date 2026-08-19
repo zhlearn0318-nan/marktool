@@ -1,16 +1,50 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "GB45438-2025 Appendix E AIGC Metadata (approximate)",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GB 45438-2025 Appendix E AIGC Metadata",
   "type": "object",
-  "required": ["Label", "ContentProducer", "ProduceID"],
+  "additionalProperties": false,
+  "required": ["AIGC"],
   "properties": {
-    "Label": { "type": "string", "minLength": 1 },
-    "ContentProducer": { "type": "string", "minLength": 1 },
-    "ProduceID": { "type": "string", "minLength": 1 },
-    "ContentPropagator": { "type": "string" },
-    "PropagateID": { "type": "string" },
-    "ReservedCode1": { "type": "string" },
-    "ReservedCode2": { "type": "string" }
-  },
-  "additionalProperties": true
+    "AIGC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "Label",
+        "ContentProducer",
+        "ProduceID",
+        "ReservedCode1",
+        "ContentPropagator",
+        "PropagateID",
+        "ReservedCode2"
+      ],
+      "properties": {
+        "Label": {
+          "type": "string",
+          "enum": ["1", "2", "3"]
+        },
+        "ContentProducer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ProduceID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ReservedCode1": {
+          "type": "string"
+        },
+        "ContentPropagator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "PropagateID": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ReservedCode2": {
+          "type": "string"
+        }
+      }
+    }
+  }
 }

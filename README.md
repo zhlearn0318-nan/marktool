@@ -1,164 +1,90 @@
 # AIGC 标识合规平台（MVP）
 
-面向图片模态的 AIGC 标识合规**检测 + 报告**原型，基于 GB 45438-2025 标准框架实现隐式元数据的真实检测，其余探针为可插拔占位。
+本仓库面向 GB 45438—2025 文件元数据隐式标识，当前包含图片检测/报告原型，以及 JPEG/PNG 后端元数据写入适配器。
 
----
-
-## 产品板块概览
-
-| 板块 | 名称 | 说明 |
-|------|------|------|
-| 板块一 | 打标 / 修复 | 为 AIGC 内容写入合规标识（元数据、水印等） |
-| 板块二 | **合规检测** ← **本 MVP** | 读取并验证已有标识的完整性与合规性 |
-| 板块三 | **检测报告** ← **本 MVP** | 生成结构化合规评级报告（A / B / C / 不合规） |
-| 板块四 | 标准互转 | 不同标准格式之间的 AIGC 元数据互转 |
-
-> **MVP 范围**：本版本仅实现 **板块二（检测）+ 板块三（报告）**，仅支持 **图片（IMAGE）** 模态。
-
----
-
-## MVP 范围与保真度
+## 当前实现范围
 
 | 能力 | 状态 | 说明 |
-|------|------|------|
-| 元数据检测（XMP → AIGC JSON → JSON Schema 校验） | **真实实现** | 读取 PNG XMP 块，提取 AIGC JSON，按附录 E 结构校验必填字段 |
-| OCR 显式文字水印检测 | **占位符** ⚠️ 未启用 | 接口预留，当前返回"未检测"警告项 |
-| TrustMark 隐式水印检测 | **占位符** ⚠️ 未启用 | 接口预留，当前返回"未检测"警告项 |
-| AI 内容溯源检测 | **占位符** ⚠️ 未启用 | 接口预留，当前返回"未检测"警告项 |
-| 评级规则（A / B / C / 不合规） | **真实实现** | 依据各探针结果按规则引擎计算最终评级 |
-| 报告存储与检索 | **真实实现** | 内存存储，支持 `GET /api/report/{id}` 查询 |
+|---|---|---|
+| JPEG/PNG AIGC 元数据写入 | 已实现 | ExifTool 写入 XMP，不覆盖原文件 |
+| 已有标识 `reject` / `replace` | 已实现 | 默认拒绝；明确替换时先删除旧记录再整体写入 |
+| 写后回读与唯一性校验 | 已实现 | 公共 XMP 读取器与 ExifTool 双路径验证 |
+| 七字段严格 Schema | 已实现 | 外层 `AIGC`、七字段、`Label` 枚举、未知字段拒绝 |
+| 附录 E 严格字符规则 | 已实现 | 拒绝空格、双引号、反斜杠、换行及严格范围外字符 |
+| 首次写入关系 | 已实现 | 强制传播者等于生产者、传播编号等于生产编号 |
+| 编号唯一性 | 已实现 | SQLite 登记“提供者 + 编号”与内容指纹的对应关系 |
+| 图片完整性校验 | 已实现 | 真实格式识别、解码、尺寸、模式与像素一致性 |
+| 图片元数据检测与报告 API | 已实现 | 保留现有 `/api/detect` 和报告接口 |
+| JPEG/PNG 标注任务 API | 已实现 | `/api/v1` 异步创建、查询、下载和 ProduceID 生成 |
+| MP4、前端标注页面 | 未实现 | 由其他任务负责 |
+| 显式标识、内容水印、C2PA | 不在本阶段 | 当前只研究文件元数据隐式标识 |
 
----
+## 关键目录
 
-## 目录结构
+```text
+backend/
+├── app/
+│   ├── api/                  # 检测接口与新增异步标注接口
+│   ├── engine/detectors/     # 元数据唯一性和七字段检测
+│   ├── metadata/             # JPEG/PNG 适配器、ExifTool 封装、XMP 读取器
+│   ├── report/               # 合规报告
+│   └── schemas/              # 共享 JSON Schema 与校验器
+└── tests/                    # 单元测试与 ExifTool 集成测试
 
-```
-.
-├── backend/
-│   ├── app/
-│   │   ├── api/            # FastAPI 路由（detect、report、health）
-│   │   ├── engine/
-│   │   │   ├── base.py     # 探针基类
-│   │   │   ├── registry.py # 探针注册表
-│   │   │   └── detectors/  # 各探针实现（元数据、显式标记、水印）
-│   │   ├── metadata/       # XMP 读取与 AIGC JSON 提取
-│   │   ├── report/         # 合规规则引擎与报告构建
-│   │   ├── schemas/        # Pydantic 模型、JSON Schema、校验逻辑
-│   │   ├── storage.py      # 报告内存存储
-│   │   └── main.py         # FastAPI 应用入口
-│   └── tests/              # pytest 测试套件（32 个用例）
-└── frontend/
-    └── src/
-        ├── pages/          # UploadPage（上传检测）、ReportPage（报告详情）
-        ├── components/     # CheckList、ComplianceRadar、ProvenanceChain
-        ├── api.ts          # 后端 API 调用封装
-        └── types.ts        # TypeScript 类型定义
+docs/
+├── gb45438-metadata-labeling-development-guide.md
+├── image-metadata-adapter.md
+├── image-metadata-api.md
+└── image-metadata-work-summary.md
 ```
 
----
+## 环境准备
 
-## API
+后端依赖：
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+安装 ExifTool 后设置路径，例如：
+
+```powershell
+$env:EXIFTOOL_PATH = 'D:\exiftool\exiftool.exe'
+```
+
+未配置数据库和任务文件目录时，开发环境默认使用 `backend/data/`；该目录已被 Git 忽略。详细说明见 [JPEG/PNG 文件元数据适配器说明](docs/image-metadata-adapter.md) 和 [异步 API 与前后端联调说明](docs/image-metadata-api.md)。
+
+## 运行现有检测 API
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+API 文档：`http://localhost:8000/docs`。
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/detect` | 上传图片，触发全量检测，返回报告（含评级） |
-| `GET` | `/api/report/{id}` | 按报告 ID 查询历史报告 |
-| `GET` | `/api/health` | 健康检查，返回 `{"status": "ok"}` |
-
-**请求示例（detect）**
-
-```bash
-curl -X POST http://localhost:8000/api/detect \
-  -F "file=@sample_marked.png"
-```
-
-**响应结构（摘要）**
-
-```json
-{
-  "report_id": "...",
-  "report": {
-    "compliance": { "rating": "B", "summary": "..." },
-    "checks": [...],
-    "provenance": [...]
-  }
-}
-```
-
----
-
-## 运行
-
-### 后端
-
-```bash
-cd backend
-.venv/Scripts/python -m uvicorn app.main:app --reload --port 8000
-```
-
-服务监听 `http://localhost:8000`，API 文档见 `http://localhost:8000/docs`。
-
-### 前端
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-前端监听 `http://localhost:5173`，已配置 `/api` 代理至后端 `:8000`。
-
----
+|---|---|---|
+| `POST` | `/api/detect` | 上传图片并生成检测报告 |
+| `GET` | `/api/report/{id}` | 查询检测报告 |
+| `GET` | `/api/health` | 健康检查 |
+| `POST` | `/api/v1/metadata-label-identifiers` | 后端生成 ProduceID |
+| `POST` | `/api/v1/metadata-label-jobs` | 上传图片并创建异步标注任务 |
+| `GET` | `/api/v1/metadata-label-jobs/{job_id}` | 查询任务状态和校验结果 |
+| `GET` | `/api/v1/metadata-label-jobs/{job_id}/output` | 下载成功结果文件 |
+| `GET` | `/api/v1/health` | 查询 JPEG/PNG/MP4 能力 |
 
 ## 测试
 
-```bash
+```powershell
 cd backend
-.venv/Scripts/python -m pytest -v
+$env:EXIFTOOL_PATH = 'D:\exiftool\exiftool.exe'
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-当前共 32 个测试用例，全部通过。
-
----
-
-## 快速体验（端到端数据路径验证）
-
-在 `backend/` 目录下生成测试样本：
-
-```bash
-cd backend
-.venv/Scripts/python -c "from tests.fixtures import make_png, VALID_AIGC; make_png('sample_marked.png', aigc_dict=VALID_AIGC); make_png('sample_unmarked.png')"
-```
-
-在进程内通过 TestClient 验证检测结果：
-
-```bash
-.venv/Scripts/python -c "
-from fastapi.testclient import TestClient
-from app.main import app
-c = TestClient(app)
-for name in ['sample_marked.png', 'sample_unmarked.png']:
-    r = c.post('/api/detect', files={'file': (name, open(name,'rb').read(), 'image/png')}).json()
-    print(name, '->', r['report']['compliance']['rating'])
-"
-```
-
-预期输出：
-
-```
-sample_marked.png -> A   # （或 B，取决于占位探针权重）
-sample_unmarked.png -> 不合规
-```
-
-> `sample_marked.png` / `sample_unmarked.png` 为临时产物，已加入 `.gitignore`，请勿提交。
-
----
-
-## 注意事项
-
-> GB 45438-2025 附录 E 的 AIGC JSON 结构按公开信息近似定义，待对照标准原文校准。
-
----
+当前共 104 项测试，覆盖现有检测流程、JPEG/PNG 适配器、任务持久化和异步 API。在安装 ExifTool 的开发机上，全部测试应实际执行并通过；没有 ExifTool 时，相关集成测试会明确显示为跳过。
 
 ## 许可证
 

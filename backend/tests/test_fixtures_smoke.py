@@ -7,7 +7,7 @@ def test_make_png_embeds_xmp(tmp_path):
     img = Image.open(p)
     img.load()
     assert "XML:com.adobe.xmp" in img.info
-    assert "aigc:metadata" in img.info["XML:com.adobe.xmp"]
+    assert "aigc:AIGC" in img.info["XML:com.adobe.xmp"]
 
 
 def test_make_png_without_metadata(tmp_path):
