@@ -33,10 +33,17 @@ backend/
 └── tests/                    # 单元测试与 ExifTool 集成测试
 
 docs/
-├── gb45438-metadata-labeling-development-guide.md
-├── image-metadata-adapter.md
-├── image-metadata-api.md
-└── image-metadata-work-summary.md
+├── README.md                       # 文档总索引
+├── 开发指南/
+│   └── GB45438-2025文件元数据标识开发手册.md
+├── 技术文档/
+│   ├── JPEG-PNG文件元数据适配器说明.md
+│   └── JPEG-PNG元数据异步接口与联调说明.md
+├── 工作报告/
+│   ├── 2026-08-21_JPEG-PNG文件元数据工作简报.md
+│   ├── 2026-08-21_图片元数据模块代码评审修改与验收报告.md
+│   └── 2026-08-21_图片元数据模块第二次工作报告_第一次工作改进.docx
+└── superpowers/                    # 仓库原有方案与设计资料
 ```
 
 ## 环境准备
@@ -55,7 +62,7 @@ python -m venv .venv
 $env:EXIFTOOL_PATH = 'D:\exiftool\exiftool.exe'
 ```
 
-未配置数据库和任务文件目录时，开发环境默认使用 `backend/data/`；该目录已被 Git 忽略。详细说明见 [JPEG/PNG 文件元数据适配器说明](docs/image-metadata-adapter.md) 和 [异步 API 与前后端联调说明](docs/image-metadata-api.md)。
+未配置数据库和任务文件目录时，开发环境默认使用 `backend/data/`；该目录已被 Git 忽略。所有资料可从[文档总索引](docs/README.md)查看，技术细节见 [JPEG/PNG 文件元数据适配器说明](docs/技术文档/JPEG-PNG文件元数据适配器说明.md) 和 [异步接口与联调说明](docs/技术文档/JPEG-PNG元数据异步接口与联调说明.md)。
 
 ## 运行现有检测 API
 
