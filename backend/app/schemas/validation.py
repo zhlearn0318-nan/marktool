@@ -18,6 +18,11 @@ AIGC_FIELD_ORDER = (
     "ReservedCode2",
 )
 
+# 国标规定字段与字符要求，但未为项目接口给出统一的工程长度上限。
+# 以下是本项目首期的防滥用边界，须在接口文档中公开。
+AIGC_MAX_FIELD_CHARACTERS = 1024
+AIGC_MAX_SERIALIZED_BYTES = 8192
+
 # GB 45438—2025 附录 E j) 给出的主要字符范围。项目首期采用严格子集：
 # 0x21、0x23~0x5B、0x5D~0x7E；排除空格、双引号、反斜杠和换行。
 GB45438_STRICT_VALUE_CHARACTERS = frozenset(
@@ -57,6 +62,11 @@ def validate_aigc_business_rules(
 
     aigc = document["AIGC"]
     errors: list[str] = []
+    for field in AIGC_FIELD_ORDER:
+        if len(aigc[field]) > AIGC_MAX_FIELD_CHARACTERS:
+            errors.append(
+                f"AIGC.{field}: 超过项目规定的 {AIGC_MAX_FIELD_CHARACTERS} 字符上限"
+            )
     if strict_characters:
         for field in AIGC_FIELD_ORDER:
             value = aigc[field]
@@ -94,4 +104,9 @@ def serialize_aigc_document(document: dict) -> str:
             for field in AIGC_FIELD_ORDER
         }
     }
-    return json.dumps(ordered, ensure_ascii=False, separators=(",", ":"))
+    serialized = json.dumps(ordered, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized.encode("utf-8")) > AIGC_MAX_SERIALIZED_BYTES:
+        raise ValueError(
+            f"AIGC JSON 超过项目规定的 {AIGC_MAX_SERIALIZED_BYTES} 字节上限"
+        )
+    return serialized

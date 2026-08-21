@@ -15,6 +15,8 @@
 7. 检查仅一份记录、逐字段一致、图片可解码、尺寸与像素不变；
 8. 全部通过后才发布结果文件，原文件不被覆盖。
 
+写入前同时使用项目 XMP 读取器和 ExifTool 检查已有记录。两者的记录数量或内容不一致时，返回 `AIGC_METADATA_INCONSISTENT`。首期不组装 Adobe Extended XMP 分段；检测到此类 JPEG 时返回 `EXTENDED_XMP_UNSUPPORTED`，而不是冒险写入或替换。
+
 ## 2. 模块位置
 
 ```text
@@ -117,6 +119,10 @@ PropagateID = ProduceID
 | `AIGC_INITIAL_RELATION_INVALID` | 首次写入时生产字段与传播字段不一致 |
 | `AIGC_IDENTIFIER_DUPLICATE` | 同一提供者的编号已指向其他内容 |
 | `AIGC_METADATA_EXISTS` | 已有标识且策略为 `reject` |
+| `AIGC_METADATA_INCONSISTENT` | 两个独立读取器的写前结果不一致 |
+| `EXTENDED_XMP_UNSUPPORTED` | JPEG 含首期无法安全组装的 Extended XMP |
+| `IMAGE_DIMENSIONS_EXCEEDED` | 图片宽高、总像素或 Pillow 解码安全限制超标 |
+| `AIGC_LENGTH_INVALID` | 序列化后的 AIGC JSON 超过项目写入上限 |
 | `METADATA_WRITE_FAILED` | 旧记录无法安全删除或 ExifTool 写入失败 |
 | `METADATA_READBACK_FAILED` | 写入后读不到、解析失败或内容不一致 |
 | `AIGC_DUPLICATE_RECORDS` | 写入后仍存在多份 AIGC 记录 |
@@ -133,6 +139,6 @@ $env:AIGC_ID_REGISTRY_PATH = (Resolve-Path '.').Path + '\data\aigc_identifiers.s
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-JPEG 和 PNG 均覆盖：无标识写入、已有标识默认拒绝、明确替换、重复记录清理、扩展名伪装、损坏文件、独立回读、唯一性和媒体完整性。还覆盖严格七字段 Schema、严格字符规则、首次写入关系、编号跨内容冲突、事务回滚、中文路径、原文件不覆盖和无关 XMP 元数据保留。
+JPEG 和 PNG 均覆盖：无标识写入、已有标识默认拒绝、明确替换、重复记录清理、Extended XMP 拒绝、双读取器分歧拒绝、扩展名伪装、损坏文件、独立回读、唯一性和媒体完整性。还覆盖严格七字段 Schema、长度和字符规则、首次写入关系、编号跨内容冲突、事务回滚、中文路径、原文件不覆盖和无关 XMP 元数据保留。
 
-如果测试环境没有安装 ExifTool，适配器集成测试会跳过；Schema、读取器和检测器单元测试仍可运行。持续集成环境应安装 ExifTool 并设置 `EXIFTOOL_PATH`，以免把集成测试跳过当作通过。
+如果普通本地环境没有安装 ExifTool，适配器集成测试会明确跳过。持续集成固定安装 ExifTool 13.59，并设置 `AIGC_REQUIRE_EXIFTOOL=1`；缺少真实工具会直接失败，不会把跳过误当作通过。

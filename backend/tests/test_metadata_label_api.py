@@ -8,13 +8,18 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.api.metadata_routes import get_metadata_job_service
 from app.main import app
 from app.metadata.exiftool_client import ExifToolClient
 from app.metadata.identifier_registry import SQLiteIdentifierRegistry
 from app.metadata.image_adapter import ImageMetadataService
-from app.metadata.job_service import MetadataJobConfig, MetadataLabelJobService
+from app.metadata.job_service import (
+    MetadataJobConfig,
+    MetadataJobRequestError,
+    MetadataLabelJobService,
+)
 from app.metadata.xmp_reader import read_aigc_records
 from tests.fixtures import VALID_AIGC, make_jpeg, make_png
 
@@ -34,6 +39,8 @@ def _find_exiftool() -> str | None:
 def metadata_api(tmp_path, monkeypatch):
     executable = _find_exiftool()
     if not executable:
+        if os.getenv("AIGC_REQUIRE_EXIFTOOL") == "1":
+            pytest.fail("CI 要求真实 ExifTool，但当前未找到可执行文件")
         pytest.skip("需要 ExifTool；请设置 EXIFTOOL_PATH 后运行接口集成测试")
     monkeypatch.setenv("EXIFTOOL_PATH", executable)
     config = MetadataJobConfig(
@@ -42,7 +49,7 @@ def metadata_api(tmp_path, monkeypatch):
         identifier_database_path=tmp_path / "identifiers.sqlite3",
         max_upload_bytes=5 * 1024 * 1024,
         retention_hours=24,
-        worker_count=2,
+        worker_count=1,
         exiftool_timeout_seconds=30,
     )
     image_service = ImageMetadataService(
@@ -120,6 +127,8 @@ def test_generate_produce_id_and_versioned_health(metadata_api):
         "image/png": True,
         "video/mp4": False,
     }
+    assert health.json()["tools"]["exiftool"]["available"] is True
+    assert re.fullmatch(r"\d+(?:\.\d+)+", health.json()["tools"]["exiftool"]["version"])
     assert health.headers["x-request-id"].startswith("req_")
 
 
@@ -191,6 +200,10 @@ def test_existing_metadata_reject_then_explicit_replace(tmp_path, metadata_api):
     rejected = _post_job(client, "marked.png", data, _request_payload())
     assert rejected.status_code == 409
     assert rejected.json()["error"]["code"] == "AIGC_METADATA_EXISTS"
+    summary = rejected.json()["error"]["existing_metadata"]
+    assert summary["record_count"] == 1
+    assert summary["records"][0]["schema_valid"] is True
+    assert summary["records"][0]["produce_id"] == VALID_AIGC["ProduceID"]
 
     replacement = _request_payload(policy="replace", Label="2")
     created = _post_job(client, "marked.png", data, replacement)
@@ -313,3 +326,109 @@ def test_unknown_job_and_output_not_ready(metadata_api, monkeypatch):
     waiting = client.get("/api/v1/metadata-label-jobs/job_waiting/output")
     assert waiting.status_code == 409
     assert waiting.json()["error"]["code"] == "OUTPUT_NOT_READY"
+
+
+def test_two_jobs_are_queued_and_completed_by_single_worker(tmp_path, metadata_api):
+    client, service = metadata_api
+    assert service.config.worker_count == 1
+    first = Path(make_png(tmp_path / "first.png")).read_bytes()
+    second_path = tmp_path / "second.png"
+    Image.new("RGB", (400, 300), (10, 20, 30)).save(second_path, "PNG")
+
+    first_job = _post_job(client, "first.png", first, _request_payload())
+    second_job = _post_job(client, "second.png", second_path.read_bytes(), _request_payload())
+    assert first_job.status_code == second_job.status_code == 202
+    assert _wait_for_terminal(client, first_job.json()["job_id"])["status"] == "succeeded"
+    assert _wait_for_terminal(client, second_job.json()["job_id"])["status"] == "succeeded"
+
+
+def test_existing_published_output_is_recovered_instead_of_overwritten(
+    tmp_path, metadata_api
+):
+    client, service = metadata_api
+    source = Path(make_png(tmp_path / "recovery-source.png"))
+    payload = _request_payload()
+    document = {"AIGC": payload["AIGC"]}
+    output = service.output_dir / "recovery-output.png"
+    service._get_image_service().write(str(source), str(output), document)
+    data = source.read_bytes()
+    now = "2026-08-21T00:00:00Z"
+    service.store.create(
+        {
+            "job_id": "job_recovery_test",
+            "request_id": "req_recovery_test",
+            "idempotency_key": None,
+            "request_fingerprint": "recovery-fingerprint",
+            "status": "queued",
+            "stage": "queued",
+            "progress": None,
+            "created_at": now,
+            "updated_at": now,
+            "original_file_name": "recovery-source.png",
+            "detected_mime_type": "image/png",
+            "input_size_bytes": len(data),
+            "input_sha256": __import__("hashlib").sha256(data).hexdigest(),
+            "input_path": str(source),
+            "output_path": str(output),
+            "output_file_name": "recovery-source_labeled.png",
+            "request_json": payload,
+        }
+    )
+
+    service._run_job("job_recovery_test")
+    recovered = service.get_job("job_recovery_test")
+    assert recovered["status"] == "succeeded"
+    assert recovered["validation"]["media_integrity_valid"] is True
+    assert output.is_file()
+
+
+def test_whole_multipart_request_limit_returns_stable_413(metadata_api):
+    client, _ = metadata_api
+    response = client.post(
+        "/api/v1/metadata-label-jobs",
+        content=b"x",
+        headers={"content-length": str(28 * 1024 * 1024)},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "REQUEST_TOO_LARGE"
+
+
+def test_mvp_rejects_multiple_metadata_workers(tmp_path):
+    with pytest.raises(ValueError, match="AIGC_JOB_WORKERS=1"):
+        MetadataJobConfig(
+            storage_root=tmp_path / "files",
+            database_path=tmp_path / "jobs.sqlite3",
+            identifier_database_path=tmp_path / "ids.sqlite3",
+            worker_count=2,
+        )
+
+
+def test_health_marks_fake_exiftool_unavailable(metadata_api, tmp_path, monkeypatch):
+    client, _ = metadata_api
+    fake_tool = tmp_path / "not-exiftool.exe"
+    fake_tool.write_text("this is not an executable", encoding="utf-8")
+    monkeypatch.setenv("EXIFTOOL_PATH", str(fake_tool))
+
+    response = client.get("/api/v1/health")
+
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["image/jpeg"] is False
+    assert response.json()["capabilities"]["image/png"] is False
+    assert response.json()["tools"]["exiftool"] == {
+        "available": False,
+        "version": None,
+    }
+
+
+def test_decompression_bomb_error_has_stable_413(metadata_api, monkeypatch):
+    _, service = metadata_api
+
+    def bomb(*_args, **_kwargs):
+        raise Image.DecompressionBombError("simulated bomb")
+
+    monkeypatch.setattr("app.metadata.job_service.Image.open", bomb)
+    with pytest.raises(MetadataJobRequestError) as captured:
+        service._inspect_upload(b"compressed-image")
+
+    assert captured.value.status_code == 413
+    assert captured.value.code == "IMAGE_DIMENSIONS_EXCEEDED"

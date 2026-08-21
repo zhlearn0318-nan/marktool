@@ -1,5 +1,7 @@
 import pytest
 
+import app.schemas.validation as validation_module
+
 from app.schemas.validation import (
     serialize_aigc_document,
     validate_aigc_business_rules,
@@ -97,3 +99,15 @@ def test_later_propagation_may_use_different_provider_and_identifier():
         document,
         require_initial_relationships=False,
     ) == []
+
+
+def test_project_field_length_limit_is_enforced():
+    document = {"AIGC": {**VALID_AIGC, "ReservedCode1": "A" * 1025}}
+    errors = validate_aigc_document(document)
+    assert errors
+
+
+def test_serialized_json_total_byte_limit_is_enforced(monkeypatch):
+    monkeypatch.setattr(validation_module, "AIGC_MAX_SERIALIZED_BYTES", 10)
+    with pytest.raises(ValueError, match="字节上限"):
+        serialize_aigc_document(VALID_DOCUMENT)

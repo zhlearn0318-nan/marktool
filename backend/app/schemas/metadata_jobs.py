@@ -107,6 +107,7 @@ class ApiErrorDetail(BaseModel):
     code: str
     message: str
     field_errors: Optional[list[FieldError]] = None
+    existing_metadata: Optional[dict[str, Any]] = None
 
 
 class ApiErrorResponse(BaseModel):
@@ -117,3 +118,4 @@ class ApiErrorResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     capabilities: dict[str, bool]
+    tools: dict[str, dict[str, Any]]

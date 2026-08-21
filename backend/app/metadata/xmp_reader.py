@@ -9,6 +9,7 @@ from typing import Any, Optional
 from PIL import Image
 
 _XMP_APP1_PREFIX = b"http://ns.adobe.com/xap/1.0/\x00"
+_EXTENDED_XMP_APP1_PREFIX = b"http://ns.adobe.com/xmp/extension/\x00"
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PNG_XMP_KEYWORD = b"XML:com.adobe.xmp"
 _FALLBACK_ELEMENT_RE = re.compile(
@@ -31,6 +32,41 @@ class AIGCRecord:
     document: Any = None
     aigc: Optional[dict] = None
     parse_error: Optional[str] = None
+
+
+def has_extended_xmp(file_path: str) -> bool:
+    """检测 JPEG 是否包含 Adobe Extended XMP APP1 分段。
+
+    首期适配器尚不负责组装 Extended XMP。写入前必须显式识别并拒绝，
+    避免标准 XMP 读取器漏掉藏在扩展分段中的旧 AIGC 标识。
+    """
+    with open(file_path, "rb") as stream:
+        if stream.read(2) != b"\xff\xd8":
+            return False
+        while True:
+            marker_start = stream.read(1)
+            if not marker_start:
+                return False
+            if marker_start != b"\xff":
+                continue
+            marker = stream.read(1)
+            while marker == b"\xff":
+                marker = stream.read(1)
+            if not marker or marker in {b"\xd9", b"\xda"}:
+                return False
+            if marker in {bytes([value]) for value in range(0xD0, 0xD8)} | {b"\x01"}:
+                continue
+            raw_length = stream.read(2)
+            if len(raw_length) != 2:
+                raise OSError("JPEG 数据段长度不完整")
+            length = int.from_bytes(raw_length, "big")
+            if length < 2:
+                raise OSError("JPEG 数据段长度无效")
+            payload = stream.read(length - 2)
+            if len(payload) != length - 2:
+                raise OSError("JPEG 数据段不完整")
+            if marker == b"\xe1" and payload.startswith(_EXTENDED_XMP_APP1_PREFIX):
+                return True
 
 
 def _decode_xmp(value: object) -> Optional[str]:

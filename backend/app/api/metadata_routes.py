@@ -8,10 +8,15 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.concurrency import run_in_threadpool
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
-from app.metadata.exiftool_client import ExifToolClient, ExifToolNotFoundError
+from app.metadata.exiftool_client import (
+    ExifToolClient,
+    ExifToolExecutionError,
+    ExifToolNotFoundError,
+)
 from app.metadata.job_service import (
     MetadataJobRequestError,
     MetadataLabelJobService,
@@ -25,6 +30,7 @@ from app.schemas.metadata_jobs import (
     JobStatusResponse,
     MetadataLabelRequest,
 )
+from app.request_limits import RequestBodyTooLarge
 
 
 logger = logging.getLogger(__name__)
@@ -49,16 +55,28 @@ def get_metadata_job_service() -> MetadataLabelJobService:
     return _default_service
 
 
+def shutdown_metadata_job_service() -> None:
+    global _default_service
+    with _service_lock:
+        service = _default_service
+        _default_service = None
+    if service is not None:
+        service.close()
+
+
 def _problem(
     status_code: int,
     request_id: str,
     code: str,
     message: str,
     field_errors: Optional[list[dict[str, str]]] = None,
+    extra: Optional[dict] = None,
 ) -> JSONResponse:
     error = {"code": code, "message": message}
     if field_errors:
         error["field_errors"] = field_errors
+    if extra:
+        error.update(extra)
     return JSONResponse(
         status_code=status_code,
         content={"request_id": request_id, "error": error},
@@ -133,6 +151,8 @@ async def create_metadata_label_job(
     request_id = new_request_id()
     try:
         form = await http_request.form()
+    except RequestBodyTooLarge:
+        raise
     except Exception:
         logger.exception("metadata job creation failed: request_id=%s", request_id)
         return _problem(
@@ -207,7 +227,8 @@ async def create_metadata_label_job(
         )
 
     try:
-        created = service.create_job(
+        created = await run_in_threadpool(
+            service.create_job,
             filename=file_part.filename,
             data=data,
             request=metadata_request,
@@ -220,6 +241,7 @@ async def create_metadata_label_job(
             exc.code,
             exc.message,
             exc.field_errors,
+            exc.extra,
         )
     except Exception:
         return _problem(
@@ -319,10 +341,12 @@ def versioned_health(response: Response):
     request_id = new_request_id()
     response.headers["X-Request-ID"] = request_id
     try:
-        ExifToolClient()
+        version = ExifToolClient().probe_version()
         image_available = True
-    except ExifToolNotFoundError:
+        tool = {"available": True, "version": version}
+    except (ExifToolNotFoundError, ExifToolExecutionError):
         image_available = False
+        tool = {"available": False, "version": None}
     return {
         "status": "ok",
         "capabilities": {
@@ -330,4 +354,5 @@ def versioned_health(response: Response):
             "image/png": image_available,
             "video/mp4": False,
         },
+        "tools": {"exiftool": tool},
     }

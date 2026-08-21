@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -28,6 +29,8 @@ class ExifToolClient:
         self.timeout_seconds = timeout_seconds
         if not self.config_path.is_file():
             raise ExifToolNotFoundError("未找到项目的 ExifTool AIGC 配置文件")
+        if not os.access(self.config_path, os.R_OK):
+            raise ExifToolNotFoundError("项目的 ExifTool AIGC 配置文件不可读")
 
     @staticmethod
     def _resolve_executable(explicit_path: Optional[str]) -> str:
@@ -106,6 +109,14 @@ class ExifToolClient:
     def read_raw_xmp(self, file_path: str) -> str:
         completed = self._run(["-b", "-XMP", file_path])
         return completed.stdout.decode("utf-8-sig", "replace")
+
+    def probe_version(self) -> str:
+        """实际启动 ExifTool，返回经过格式校验的版本号。"""
+        completed = self._run(["-ver"])
+        version = completed.stdout.decode("ascii", "replace").strip()
+        if not re.fullmatch(r"\d+(?:\.\d+)+", version):
+            raise ExifToolExecutionError("ExifTool 返回了无法识别的版本信息")
+        return version
 
     def read_known_aigc_values(self, file_path: str) -> list[str]:
         completed = self._run([

@@ -50,14 +50,17 @@
 2. **任务数据库**：当前使用 SQLite；默认位置为 `backend/data/metadata_label_jobs.sqlite3`。
 3. **编号登记库**：未显式配置时默认使用 `backend/data/aigc_identifiers.sqlite3`。
 4. **文件存储**：原文件和结果文件使用随机物理名称，默认放在 `backend/data/metadata_label_files/` 的隔离子目录；数据库只保存引用。
-5. **异步执行器**：当前使用单进程线程池，默认同时运行 2 个图片任务；进程重启后，数据库中的 `running` 任务会重新回到队列。
-6. **文件大小上限**：JPEG/PNG 默认 25 MiB，可通过环境变量修改。
+5. **异步执行器**：当前使用单进程、单工作线程队列。这样可避免首期 SQLite 编号登记事务在多任务写入时互相锁定；API 仍是异步任务接口。进程重启后，未完成任务会重新入队。
+6. **资源上限**：单文件默认 25 MiB、完整 multipart 请求默认 27 MiB、单边不超过 16384 像素、总像素不超过 4000 万；均可通过环境变量调整。
 7. **保留时间**：成功或失败任务默认保留 168 小时，即 7 天；查询时会清理已过期记录和对应文件。
 8. **工具超时**：单次 ExifTool 调用默认最多 30 秒。
 9. **适配器版本**：审计记录使用 `jpeg-png-xmp-exiftool-v1`，载体使用 `xmp-aigc-v1`。
 10. **幂等重试**：支持可选 `Idempotency-Key`。相同键、相同文件和参数返回同一个任务；相同键用于不同请求时返回冲突。
 11. **浏览器兼容**：严格支持 `request` 为 `application/json` 文件部分；同时兼容浏览器 `FormData` 直接追加 JSON 字符串的常见写法。
 12. **当前能力声明**：`/api/v1/health` 对 JPEG/PNG 按 ExifTool 是否可用返回能力状态；MP4 当前固定为 `false`，由后续视频模块接入。
+13. **字段长度**：七字段每项最多 1024 个字符，紧凑 AIGC JSON 最多 8192 个 UTF-8 字节。这是项目防滥用限制，不是国标规定的唯一数值。
+14. **中断恢复**：任务记录 `publishing_output` 阶段；若结果已发布但状态尚未写成成功，重启后会回读、校验像素和哈希并补记成功，不覆盖已有结果。
+15. **已有标识摘要**：`reject` 的 409 响应返回安全摘要（份数、是否可解析/合规及必要身份字段），不回显原始损坏 XMP。
 
 新增的接口层错误码：
 
@@ -169,6 +172,9 @@ GET /api/v1/health
     "image/jpeg": true,
     "image/png": true,
     "video/mp4": false
+  },
+  "tools": {
+    "exiftool": {"available": true, "version": "13.59"}
   }
 }
 ```
@@ -184,8 +190,12 @@ GET /api/v1/health
 | `AIGC_ID_REGISTRY_PATH` | `backend/data/aigc_identifiers.sqlite3` | 编号唯一性登记库 |
 | `AIGC_JOB_STORAGE_DIR` | `backend/data/metadata_label_files` | 原文件和结果文件目录 |
 | `AIGC_MAX_UPLOAD_BYTES` | `26214400` | 单文件最大字节数 |
+| `AIGC_MAX_REQUEST_BYTES` | `28311552` | 完整 multipart 请求最大字节数 |
+| `AIGC_MAX_IMAGE_WIDTH` | `16384` | 图片最大宽度 |
+| `AIGC_MAX_IMAGE_HEIGHT` | `16384` | 图片最大高度 |
+| `AIGC_MAX_IMAGE_PIXELS` | `40000000` | 图片最大总像素数 |
 | `AIGC_JOB_RETENTION_HOURS` | `168` | 任务和文件保留小时数 |
-| `AIGC_JOB_WORKERS` | `2` | 单机并发任务数 |
+| `AIGC_JOB_WORKERS` | `1` | 首期固定为 1；设置其他值会拒绝启动 |
 | `AIGC_EXIFTOOL_TIMEOUT_SECONDS` | `30` | 单次 ExifTool 超时秒数 |
 
 开发机至少需要设置：

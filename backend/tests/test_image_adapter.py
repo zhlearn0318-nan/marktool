@@ -38,6 +38,8 @@ def _find_exiftool() -> str | None:
 def service(tmp_path):
     executable = _find_exiftool()
     if not executable:
+        if os.getenv("AIGC_REQUIRE_EXIFTOOL") == "1":
+            pytest.fail("CI 要求真实 ExifTool，但当前未找到可执行文件")
         pytest.skip("需要 ExifTool；请设置 EXIFTOOL_PATH 后运行集成测试")
     return ImageMetadataService(
         ExifToolClient(executable=executable),
@@ -226,7 +228,7 @@ def test_unrecognized_aigc_namespace_is_not_silently_overwritten(tmp_path, servi
     with pytest.raises(ImageMetadataError) as captured:
         service.write(str(source), str(output), VALID_DOCUMENT, policy="replace")
 
-    assert captured.value.code == "METADATA_WRITE_FAILED"
+    assert captured.value.code == "AIGC_METADATA_INCONSISTENT"
     assert not output.exists()
 
 
@@ -327,3 +329,51 @@ def test_failed_write_rolls_back_identifier_reservation(tmp_path, service, monke
     monkeypatch.setattr(service.exiftool, "write_aigc", original_write)
     service.write(str(source), str(tmp_path / "success.png"), VALID_DOCUMENT)
     assert (tmp_path / "success.png").is_file()
+
+
+@pytest.mark.parametrize("policy", ["reject", "replace"])
+def test_extended_xmp_jpeg_is_explicitly_rejected(tmp_path, service, policy):
+    source = Path(make_jpeg(tmp_path / "extended.jpg"))
+    original = source.read_bytes()
+    extension_payload = (
+        b"http://ns.adobe.com/xmp/extension/\x00"
+        + b"0123456789ABCDEF0123456789ABCDEF"
+        + (4).to_bytes(4, "big")
+        + (0).to_bytes(4, "big")
+        + b"test"
+    )
+    segment = b"\xff\xe1" + (len(extension_payload) + 2).to_bytes(2, "big") + extension_payload
+    source.write_bytes(original[:2] + segment + original[2:])
+
+    with pytest.raises(ImageMetadataError) as captured:
+        service.write(
+            str(source), str(tmp_path / "output.jpg"), VALID_DOCUMENT, policy=policy
+        )
+
+    assert captured.value.code == "EXTENDED_XMP_UNSUPPORTED"
+    assert not (tmp_path / "output.jpg").exists()
+
+
+def test_cross_reader_disagreement_stops_before_write(tmp_path, service, monkeypatch):
+    source = Path(make_png(tmp_path / "source.png"))
+    monkeypatch.setattr(
+        service.exiftool,
+        "read_known_aigc_values",
+        lambda _path: ['{"AIGC":{"Label":"1"}}'],
+    )
+
+    with pytest.raises(ImageMetadataError) as captured:
+        service.write(str(source), str(tmp_path / "output.png"), VALID_DOCUMENT)
+
+    assert captured.value.code == "AIGC_METADATA_INCONSISTENT"
+    assert not (tmp_path / "output.png").exists()
+
+
+def test_image_dimension_limit_is_enforced_before_processing(tmp_path, service):
+    source = Path(make_png(tmp_path / "wide.png", size=(101, 10)))
+    service.max_image_width = 100
+
+    with pytest.raises(ImageMetadataError) as captured:
+        service.write(str(source), str(tmp_path / "output.png"), VALID_DOCUMENT)
+
+    assert captured.value.code == "IMAGE_DIMENSIONS_EXCEEDED"

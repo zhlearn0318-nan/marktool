@@ -9,6 +9,7 @@
 | JPEG/PNG AIGC 元数据写入 | 已实现 | ExifTool 写入 XMP，不覆盖原文件 |
 | 已有标识 `reject` / `replace` | 已实现 | 默认拒绝；明确替换时先删除旧记录再整体写入 |
 | 写后回读与唯一性校验 | 已实现 | 公共 XMP 读取器与 ExifTool 双路径验证 |
+| 写前交叉检查 | 已实现 | 两种读取结果不一致或含 Extended XMP 时安全拒绝 |
 | 七字段严格 Schema | 已实现 | 外层 `AIGC`、七字段、`Label` 枚举、未知字段拒绝 |
 | 附录 E 严格字符规则 | 已实现 | 拒绝空格、双引号、反斜杠、换行及严格范围外字符 |
 | 首次写入关系 | 已实现 | 强制传播者等于生产者、传播编号等于生产编号 |
@@ -84,7 +85,7 @@ $env:EXIFTOOL_PATH = 'D:\exiftool\exiftool.exe'
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-当前共 104 项测试，覆盖现有检测流程、JPEG/PNG 适配器、任务持久化和异步 API。在安装 ExifTool 的开发机上，全部测试应实际执行并通过；没有 ExifTool 时，相关集成测试会明确显示为跳过。
+当前共 122 项测试，覆盖现有检测流程、JPEG/PNG 适配器、任务持久化、异步 API、安全边界和中断恢复。本地安装 ExifTool 后全部测试应实际执行并通过；GitHub Actions 固定使用 ExifTool 13.59，并要求真实 JPEG/PNG 集成测试不得跳过。
 
 ## 许可证
 

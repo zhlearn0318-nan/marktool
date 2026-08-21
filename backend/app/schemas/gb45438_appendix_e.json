@@ -24,25 +24,31 @@
         },
         "ContentProducer": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 1024
         },
         "ProduceID": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 1024
         },
         "ReservedCode1": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 1024
         },
         "ContentPropagator": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 1024
         },
         "PropagateID": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 1024
         },
         "ReservedCode2": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 1024
         }
       }
     }

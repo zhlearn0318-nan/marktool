@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import uuid
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -22,7 +23,6 @@ from app.metadata.job_store import (
     IdempotencyConflictError,
     SQLiteMetadataJobStore,
 )
-from app.metadata.xmp_reader import read_aigc_records
 from app.schemas.metadata_jobs import MetadataLabelRequest
 from app.schemas.validation import (
     validate_aigc_business_rules,
@@ -50,12 +50,14 @@ class MetadataJobRequestError(RuntimeError):
         code: str,
         message: str,
         field_errors: Optional[list[dict[str, str]]] = None,
+        extra: Optional[dict] = None,
     ):
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.field_errors = field_errors or []
+        self.extra = extra or {}
 
 
 @dataclass(frozen=True)
@@ -64,9 +66,19 @@ class MetadataJobConfig:
     database_path: Path
     identifier_database_path: Path
     max_upload_bytes: int = 25 * 1024 * 1024
+    max_request_bytes: int = 27 * 1024 * 1024
+    max_image_width: int = 16384
+    max_image_height: int = 16384
+    max_image_pixels: int = 40_000_000
     retention_hours: int = 168
-    worker_count: int = 2
+    worker_count: int = 1
     exiftool_timeout_seconds: int = 30
+
+    def __post_init__(self) -> None:
+        if self.worker_count != 1:
+            raise ValueError(
+                "首期 SQLite 编号登记方案要求 AIGC_JOB_WORKERS=1；多进程并发尚未开放"
+            )
 
     @classmethod
     def from_environment(cls) -> "MetadataJobConfig":
@@ -87,8 +99,14 @@ class MetadataJobConfig:
             max_upload_bytes=int(
                 os.getenv("AIGC_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024))
             ),
+            max_request_bytes=int(
+                os.getenv("AIGC_MAX_REQUEST_BYTES", str(27 * 1024 * 1024))
+            ),
+            max_image_width=int(os.getenv("AIGC_MAX_IMAGE_WIDTH", "16384")),
+            max_image_height=int(os.getenv("AIGC_MAX_IMAGE_HEIGHT", "16384")),
+            max_image_pixels=int(os.getenv("AIGC_MAX_IMAGE_PIXELS", "40000000")),
             retention_hours=int(os.getenv("AIGC_JOB_RETENTION_HOURS", "168")),
-            worker_count=int(os.getenv("AIGC_JOB_WORKERS", "2")),
+            worker_count=int(os.getenv("AIGC_JOB_WORKERS", "1")),
             exiftool_timeout_seconds=int(
                 os.getenv("AIGC_EXIFTOOL_TIMEOUT_SECONDS", "30")
             ),
@@ -119,6 +137,10 @@ class MetadataLabelJobService:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.store = SQLiteMetadataJobStore(str(self.config.database_path))
         self._image_service = image_service
+        if self._image_service is not None:
+            self._image_service.max_image_width = self.config.max_image_width
+            self._image_service.max_image_height = self.config.max_image_height
+            self._image_service.max_image_pixels = self.config.max_image_pixels
         self._image_service_lock = threading.Lock()
         self._executor = ThreadPoolExecutor(
             max_workers=max(1, self.config.worker_count),
@@ -142,14 +164,37 @@ class MetadataLabelJobService:
                         str(self.config.identifier_database_path)
                     )
                     self._image_service = ImageMetadataService(client, registry)
+                    self._image_service.max_image_width = self.config.max_image_width
+                    self._image_service.max_image_height = self.config.max_image_height
+                    self._image_service.max_image_pixels = self.config.max_image_pixels
         return self._image_service
 
-    @staticmethod
-    def _inspect_upload(data: bytes) -> _InspectedUpload:
+    def _inspect_upload(self, data: bytes) -> _InspectedUpload:
         try:
-            with Image.open(BytesIO(data)) as image:
-                image.load()
-                format_name = (image.format or "").upper()
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(BytesIO(data)) as image:
+                    width, height = image.size
+                    if (
+                        width > self.config.max_image_width
+                        or height > self.config.max_image_height
+                        or width * height > self.config.max_image_pixels
+                    ):
+                        raise MetadataJobRequestError(
+                            413,
+                            "IMAGE_DIMENSIONS_EXCEEDED",
+                            "图片尺寸或总像素数超过项目安全上限。",
+                        )
+                    image.load()
+                    format_name = (image.format or "").upper()
+        except MetadataJobRequestError:
+            raise
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+            raise MetadataJobRequestError(
+                413,
+                "IMAGE_DIMENSIONS_EXCEEDED",
+                "图片触发了解码安全限制。",
+            ) from exc
         except (UnidentifiedImageError, OSError, ValueError) as exc:
             raise MetadataJobRequestError(
                 415,
@@ -229,6 +274,27 @@ class MetadataLabelJobService:
         return f"{stem}_labeled{suffix}"
 
     @staticmethod
+    def _existing_metadata_summary(records) -> dict:
+        items = []
+        for record in records[:5]:
+            schema_valid = (
+                record.parse_error is None
+                and record.document is not None
+                and not validate_aigc_document(record.document)
+            )
+            aigc = record.aigc if isinstance(record.aigc, dict) else {}
+            items.append(
+                {
+                    "parseable": record.parse_error is None,
+                    "schema_valid": schema_valid,
+                    "label": aigc.get("Label"),
+                    "content_producer": aigc.get("ContentProducer"),
+                    "produce_id": aigc.get("ProduceID"),
+                }
+            )
+        return {"record_count": len(records), "records": items, "truncated": len(records) > 5}
+
+    @staticmethod
     def _request_fingerprint(
         input_sha256: str, request_payload: dict
     ) -> str:
@@ -295,12 +361,19 @@ class MetadataLabelJobService:
 
         input_path.write_bytes(data)
         try:
-            records = read_aigc_records(str(input_path))
+            try:
+                records = self._get_image_service().inspect_existing_metadata(input_path)
+            except ImageMetadataError as exc:
+                status_code = 409 if exc.code == "AIGC_METADATA_INCONSISTENT" else 422
+                raise MetadataJobRequestError(status_code, exc.code, str(exc)) from exc
             if records and request.existing_metadata_policy == "reject":
                 raise MetadataJobRequestError(
                     409,
                     "AIGC_METADATA_EXISTS",
                     f"文件已存在 {len(records)} 份可识别的 AIGC 元数据；如需替换必须明确选择 replace。",
+                    extra={
+                        "existing_metadata": self._existing_metadata_summary(records)
+                    },
                 )
             values = {
                 "job_id": job_id,
@@ -351,15 +424,28 @@ class MetadataLabelJobService:
             return
         try:
             request = MetadataLabelRequest.model_validate(record["request"])
-            self.store.update_stage(job_id, "writing_metadata", iso_utc(utc_now()))
-            result = self._get_image_service().write(
-                record["input_path"],
-                record["output_path"],
-                request.aigc_document(),
-                policy=request.existing_metadata_policy,
-                initial_write=True,
-            )
-            self.store.update_stage(job_id, "verifying_metadata", iso_utc(utc_now()))
+            image_service = self._get_image_service()
+            output_path = Path(record["output_path"])
+            if output_path.is_file():
+                self.store.update_stage(job_id, "recovering_published_output", iso_utc(utc_now()))
+                result = image_service.recover_published(
+                    record["input_path"],
+                    record["output_path"],
+                    request.aigc_document(),
+                    expected_input_sha256=record["input_sha256"],
+                )
+            else:
+                def update_stage(stage: str) -> None:
+                    self.store.update_stage(job_id, stage, iso_utc(utc_now()))
+
+                result = image_service.write(
+                    record["input_path"],
+                    record["output_path"],
+                    request.aigc_document(),
+                    policy=request.existing_metadata_policy,
+                    initial_write=True,
+                    stage_callback=update_stage,
+                )
             validation = {
                 "read_back_succeeded": result.validation.read_back_succeeded,
                 "schema_valid": result.validation.schema_valid,

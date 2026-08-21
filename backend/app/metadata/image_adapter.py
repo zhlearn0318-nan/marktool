@@ -3,10 +3,12 @@ import json
 import os
 import shutil
 import tempfile
+import warnings
+from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PIL import Image, UnidentifiedImageError
 
@@ -20,7 +22,7 @@ from app.metadata.identifier_registry import (
     IdentifierRegistry,
     SQLiteIdentifierRegistry,
 )
-from app.metadata.xmp_reader import read_aigc_records
+from app.metadata.xmp_reader import has_extended_xmp, read_aigc_records
 from app.schemas.validation import (
     serialize_aigc_document,
     validate_aigc_business_rules,
@@ -97,11 +99,17 @@ class ImageMetadataService:
         self,
         exiftool: Optional[ExifToolClient] = None,
         identifier_registry: Optional[IdentifierRegistry] = None,
+        max_image_width: int = 16384,
+        max_image_height: int = 16384,
+        max_image_pixels: int = 40_000_000,
     ):
         self.exiftool = exiftool or ExifToolClient()
         self.identifier_registry = (
             identifier_registry or SQLiteIdentifierRegistry.from_environment()
         )
+        self.max_image_width = max_image_width
+        self.max_image_height = max_image_height
+        self.max_image_pixels = max_image_pixels
         self._adapters = {
             "JPEG": JpegXmpAdapter(),
             "PNG": PngXmpAdapter(),
@@ -115,30 +123,46 @@ class ImageMetadataService:
                 digest.update(block)
         return digest.hexdigest()
 
-    @staticmethod
-    def _inspect_image(file_path: Path) -> _ImageSnapshot:
+    def _inspect_image(self, file_path: Path) -> _ImageSnapshot:
         try:
-            with Image.open(file_path) as image:
-                image.load()
-                format_name = (image.format or "").upper()
-                if format_name not in {"JPEG", "PNG"}:
-                    raise ImageMetadataError(
-                        "UNSUPPORTED_MEDIA_TYPE",
-                        "当前图片适配器只支持 JPEG/JPG 和 PNG",
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(file_path) as image:
+                    width, height = image.size
+                    if (
+                        width > self.max_image_width
+                        or height > self.max_image_height
+                        or width * height > self.max_image_pixels
+                    ):
+                        raise ImageMetadataError(
+                            "IMAGE_DIMENSIONS_EXCEEDED",
+                            "图片尺寸或总像素数超过项目安全上限",
+                        )
+                    image.load()
+                    format_name = (image.format or "").upper()
+                    if format_name not in {"JPEG", "PNG"}:
+                        raise ImageMetadataError(
+                            "UNSUPPORTED_MEDIA_TYPE",
+                            "当前图片适配器只支持 JPEG/JPG 和 PNG",
+                        )
+                    pixel_digest = hashlib.sha256()
+                    pixel_digest.update(image.mode.encode("ascii", "replace"))
+                    pixel_digest.update(str(image.size).encode("ascii"))
+                    pixel_digest.update(image.tobytes())
+                    return _ImageSnapshot(
+                        format_name=format_name,
+                        mime_type="image/jpeg" if format_name == "JPEG" else "image/png",
+                        size=image.size,
+                        mode=image.mode,
+                        pixel_sha256=pixel_digest.hexdigest(),
                     )
-                pixel_digest = hashlib.sha256()
-                pixel_digest.update(image.mode.encode("ascii", "replace"))
-                pixel_digest.update(str(image.size).encode("ascii"))
-                pixel_digest.update(image.tobytes())
-                return _ImageSnapshot(
-                    format_name=format_name,
-                    mime_type="image/jpeg" if format_name == "JPEG" else "image/png",
-                    size=image.size,
-                    mode=image.mode,
-                    pixel_sha256=pixel_digest.hexdigest(),
-                )
         except ImageMetadataError:
             raise
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+            raise ImageMetadataError(
+                "IMAGE_DIMENSIONS_EXCEEDED",
+                "图片触发了解码安全限制",
+            ) from exc
         except (UnidentifiedImageError, OSError, ValueError) as exc:
             raise ImageMetadataError(
                 "UNSUPPORTED_MEDIA_TYPE",
@@ -213,6 +237,44 @@ class ImageMetadataService:
             )
         return record.document
 
+    @staticmethod
+    def _canonical_value(value: str) -> str:
+        try:
+            return json.dumps(
+                json.loads(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+        except (json.JSONDecodeError, TypeError):
+            return value.strip()
+
+    def inspect_existing_metadata(self, file_path: Path):
+        """用项目读取器与 ExifTool 交叉读取，任一盲区都停止写入。"""
+        try:
+            if has_extended_xmp(str(file_path)):
+                raise ImageMetadataError(
+                    "EXTENDED_XMP_UNSUPPORTED",
+                    "JPEG 含 Extended XMP；当前版本无法安全组装全部分段，已拒绝处理",
+                )
+        except OSError as exc:
+            raise ImageMetadataError(
+                "METADATA_READBACK_FAILED", "无法检查图片的 Extended XMP"
+            ) from exc
+
+        records = self._read_records(file_path)
+        try:
+            external_values = self.exiftool.read_known_aigc_values(str(file_path))
+        except (ExifToolExecutionError, ExifToolNotFoundError) as exc:
+            raise ImageMetadataError(
+                "METADATA_READBACK_FAILED", "ExifTool 写入前检查 AIGC 元数据失败"
+            ) from exc
+        project_values = [self._canonical_value(item.raw_value) for item in records]
+        external = [self._canonical_value(item) for item in external_values]
+        if Counter(project_values) != Counter(external):
+            raise ImageMetadataError(
+                "AIGC_METADATA_INCONSISTENT",
+                "项目读取器与 ExifTool 的写入前检查结果不一致，已拒绝处理",
+            )
+        return records
+
     def write(
         self,
         source_path: str,
@@ -220,6 +282,7 @@ class ImageMetadataService:
         document: dict,
         policy: ExistingMetadataPolicy | str = ExistingMetadataPolicy.REJECT,
         initial_write: bool = True,
+        stage_callback: Optional[Callable[[str], None]] = None,
     ) -> ImageMetadataWriteResult:
         errors = validate_aigc_document(document)
         if errors:
@@ -268,7 +331,7 @@ class ImageMetadataService:
         source_snapshot = self._inspect_image(source)
         adapter = self._adapters[source_snapshot.format_name]
         source_hash = self._sha256(source)
-        existing_records = self._read_records(source)
+        existing_records = self.inspect_existing_metadata(source)
         if existing_records and policy_value is ExistingMetadataPolicy.REJECT:
             raise ImageMetadataError(
                 "AIGC_METADATA_EXISTS",
@@ -312,7 +375,14 @@ class ImageMetadataService:
                         "仍有无法安全移除的旧 AIGC 元数据，已停止替换",
                     )
 
-            serialized = serialize_aigc_document(document)
+            try:
+                serialized = serialize_aigc_document(document)
+            except ValueError as exc:
+                raise ImageMetadataError(
+                    "AIGC_LENGTH_INVALID", "AIGC 元数据超过项目写入长度上限"
+                ) from exc
+            if stage_callback:
+                stage_callback("writing_metadata")
             try:
                 adapter.write(self.exiftool, str(temporary), serialized)
             except (ExifToolExecutionError, ExifToolNotFoundError) as exc:
@@ -321,6 +391,8 @@ class ImageMetadataService:
                     "ExifTool 未能写入 AIGC 元数据",
                 ) from exc
 
+            if stage_callback:
+                stage_callback("verifying_metadata")
             embedded = self._verify_metadata(temporary, document)
             output_snapshot = self._inspect_image(temporary)
             if (
@@ -340,6 +412,8 @@ class ImageMetadataService:
                 )
 
             output_hash = self._sha256(temporary)
+            if stage_callback:
+                stage_callback("publishing_output")
             os.replace(temporary, output)
             result = ImageMetadataWriteResult(
                 output_path=str(output),
@@ -372,3 +446,53 @@ class ImageMetadataService:
                 reservation.rollback()
             if temporary.exists():
                 temporary.unlink()
+
+    def recover_published(
+        self,
+        source_path: str,
+        output_path: str,
+        document: dict,
+        *,
+        expected_input_sha256: str,
+    ) -> ImageMetadataWriteResult:
+        """恢复“结果已发布、任务状态尚未落库”的中断任务。"""
+        source = Path(source_path).resolve()
+        output = Path(output_path).resolve()
+        if not output.is_file():
+            raise ImageMetadataError("OUTPUT_FILE_MISSING", "待恢复的结果文件不存在")
+        source_snapshot = self._inspect_image(source)
+        if self._sha256(source) != expected_input_sha256:
+            raise ImageMetadataError("MEDIA_INTEGRITY_FAILED", "恢复时发现原文件发生变化")
+        embedded = self._verify_metadata(output, document)
+        output_snapshot = self._inspect_image(output)
+        if (
+            source_snapshot.format_name != output_snapshot.format_name
+            or source_snapshot.size != output_snapshot.size
+            or source_snapshot.mode != output_snapshot.mode
+            or source_snapshot.pixel_sha256 != output_snapshot.pixel_sha256
+        ):
+            raise ImageMetadataError(
+                "MEDIA_INTEGRITY_FAILED", "恢复时发现结果图片的像素内容不一致"
+            )
+        try:
+            reservation = self.identifier_registry.reserve(
+                document, source_snapshot.pixel_sha256
+            )
+            reservation.commit()
+        except DuplicateIdentifierError as exc:
+            field = "ProduceID" if exc.role == "producer" else "PropagateID"
+            raise ImageMetadataError(
+                "AIGC_IDENTIFIER_DUPLICATE", f"{field} 已被同一提供者用于其他内容"
+            ) from exc
+        adapter = self._adapters[source_snapshot.format_name]
+        return ImageMetadataWriteResult(
+            output_path=str(output),
+            detected_format=source_snapshot.format_name,
+            mime_type=adapter.mime_type,
+            carrier=adapter.carrier,
+            adapter_version=adapter.adapter_version,
+            input_sha256=expected_input_sha256,
+            output_sha256=self._sha256(output),
+            embedded_metadata=embedded,
+            validation=ImageValidationResult(True, True, True, True),
+        )
