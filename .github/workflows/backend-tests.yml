@@ -26,10 +26,9 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           mkdir -p tools
-          curl --fail --silent --show-error --location \
-            https://exiftool.org/Image-ExifTool-13.59.tar.gz \
-            --output tools/Image-ExifTool-13.59.tar.gz
-          tar -xzf tools/Image-ExifTool-13.59.tar.gz -C tools
+          git clone --depth 1 --branch 13.59 \
+            https://github.com/exiftool/exiftool.git \
+            tools/Image-ExifTool-13.59
           chmod +x tools/Image-ExifTool-13.59/exiftool
           test "$(tools/Image-ExifTool-13.59/exiftool -ver)" = "13.59"
       - name: Run all tests with real ExifTool

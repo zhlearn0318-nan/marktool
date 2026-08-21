@@ -22,7 +22,7 @@
 | ExifTool 健康检查假阳性 | 已解决 | 实际执行 `exiftool -ver`；校验配置可读、退出码及版本格式；假文件、超时、错误退出和异常输出均判为不可用 |
 | 上传与解码资源限制不完整 | 已解决 | 单文件、完整请求、分块请求、宽高和总像素均设上限；处理 Pillow 解压炸弹；图片预检移出事件循环 |
 | 409 响应不能支持前端展示 | 已解决 | `AIGC_METADATA_EXISTS` 返回安全摘要，包括份数、解析/Schema 状态及必要身份字段，不回显损坏的原始 XMP |
-| 缺少真实 ExifTool CI 门禁 | 已解决 | GitHub Actions 固定 ExifTool 13.59；设置 `AIGC_REQUIRE_EXIFTOOL=1`，缺少真实工具时测试失败；保留真实 JPEG/PNG 端到端测试 |
+| 缺少真实 ExifTool CI 门禁 | 已解决 | GitHub Actions 从上游仓库固定检出 ExifTool `13.59` 标签；设置 `AIGC_REQUIRE_EXIFTOOL=1`，缺少真实工具时测试失败；保留真实 JPEG/PNG 端到端测试 |
 
 ## 3. 本轮具体改进
 
@@ -37,7 +37,7 @@
 9. 健康接口真实运行 ExifTool，并返回 `available` 和版本号。
 10. 409 响应增加已有标识安全摘要。
 11. FastAPI 退出时关闭默认任务服务线程池，耗时上传预检放入工作线程。
-12. GitHub Actions 固定真实 ExifTool 13.59 并运行全部后端测试。
+12. GitHub Actions 从上游仓库固定检出真实 ExifTool `13.59` 标签并运行全部后端测试。
 
 ## 4. 没有按“更完整方案”实现的部分及原因
 
