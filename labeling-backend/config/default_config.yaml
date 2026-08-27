@@ -1,0 +1,36 @@
+# GB 45438-2025 元数据标注服务 · 默认配置（开发手册 §12/§13）
+server:
+  host: 127.0.0.1
+  port: 8000
+
+# 工具路径（可按环境覆盖）
+paths:
+  exiftool: exiftool
+  ffprobe: ffprobe
+  ffmpeg: ffmpeg
+  exiftool_config: config/exiftool_aigc.config
+
+storage:
+  # 本地隔离目录（§12.1）：数据库存引用，二进制存文件系统
+  root: ./storage
+  # 单文件大小上限（§9.1/§13）
+  max_file_bytes: 536870912        # 512 MB
+  # 结果文件可下载时长（§12.3）
+  output_retention_hours: 72
+  # 任务记录保留时长
+  job_retention_hours: 168
+
+limits:
+  # 并发任务数上限（§13）
+  max_concurrent_jobs: 4
+  # 单任务处理超时（§13）
+  job_timeout_seconds: 600
+  # 媒体完整性校验的时长允许偏差（秒）
+  duration_tolerance_seconds: 0.1
+
+# 能力开关（§7.5）：前端据此隐藏/禁用对应入口
+# 首期视频适配器已实现；图片适配器由队友负责，暂标记不可用
+capabilities:
+  image/jpeg: false
+  image/png: false
+  video/mp4: true
