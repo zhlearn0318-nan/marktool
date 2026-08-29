@@ -19,7 +19,10 @@ class MetadataRequestSizeLimitMiddleware:
     async def __call__(self, scope, receive, send):
         if (
             scope["type"] != "http"
-            or scope.get("path") != "/api/v1/metadata-label-jobs"
+            or scope.get("path") not in {
+                "/api/v1/metadata-label-jobs",
+                "/api/v1/metadata-repair-plans",
+            }
             or scope.get("method") != "POST"
         ):
             await self.app(scope, receive, send)
