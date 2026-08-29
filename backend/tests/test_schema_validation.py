@@ -7,6 +7,7 @@ from app.schemas.validation import (
     validate_aigc_business_rules,
     validate_aigc_document,
     validate_aigc_json,
+    validate_project_policy,
 )
 from tests.fixtures import VALID_AIGC, VALID_DOCUMENT
 
@@ -103,8 +104,8 @@ def test_later_propagation_may_use_different_provider_and_identifier():
 
 def test_project_field_length_limit_is_enforced():
     document = {"AIGC": {**VALID_AIGC, "ReservedCode1": "A" * 1025}}
-    errors = validate_aigc_document(document)
-    assert errors
+    assert validate_aigc_document(document) == []
+    assert validate_project_policy(document)
 
 
 def test_serialized_json_total_byte_limit_is_enforced(monkeypatch):

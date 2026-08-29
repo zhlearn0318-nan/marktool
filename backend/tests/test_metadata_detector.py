@@ -60,15 +60,17 @@ def test_duplicate_records_are_fail(tmp_path):
     assert item.id == "metadata.uniqueness"
 
 
-def test_strict_character_violation_is_fail(tmp_path):
+def test_strict_character_violation_is_project_warning_not_gb_failure(tmp_path):
     invalid_characters = {
         **VALID_AIGC,
         "ContentProducer": "示例机构",
     }
     ctx = _ctx(make_png(tmp_path / "characters.png", aigc_dict=invalid_characters))
-    item = MetadataDetector().detect(ctx)[0]
-    assert item.status == CheckStatus.FAIL
-    assert item.id == "metadata.characters"
+    items = MetadataDetector().detect(ctx)
+    assert items[0].status == CheckStatus.PASS
+    assert items[1].status == CheckStatus.WARN
+    assert items[1].id == "metadata.project_policy"
+    assert "不等同于国标不合规" in items[1].suggestion
 
 
 def test_later_propagation_with_different_provider_is_still_valid(tmp_path):

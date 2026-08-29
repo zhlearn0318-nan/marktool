@@ -36,7 +36,11 @@ GB45438_STRICT_VALUE_CHARACTERS = frozenset(
 
 
 def validate_aigc_document(document: Any) -> list[str]:
-    """校验文件中实际保存的外层 ``{"AIGC": {...}}`` 对象。"""
+    """按 GB 45438—2025 附录 E 校验外层对象和固定七字段。
+
+    工程长度上限和首期严格字符子集不属于国标结构结论，由
+    :func:`validate_aigc_business_rules` 作为项目处理规则另行返回。
+    """
     errors: list[str] = []
     for error in sorted(_VALIDATOR.iter_errors(document), key=lambda item: list(item.path)):
         field = ".".join(str(part) for part in error.path) or "root"
@@ -55,18 +59,20 @@ def validate_aigc_business_rules(
     *,
     require_initial_relationships: bool = False,
     strict_characters: bool = True,
+    enforce_project_lengths: bool = True,
 ) -> list[str]:
-    """校验 JSON Schema 无法表达的国标业务规则。"""
+    """校验调用方选择启用的首次写入关系和项目兼容性规则。"""
     if validate_aigc_document(document):
         return []
 
     aigc = document["AIGC"]
     errors: list[str] = []
-    for field in AIGC_FIELD_ORDER:
-        if len(aigc[field]) > AIGC_MAX_FIELD_CHARACTERS:
-            errors.append(
-                f"AIGC.{field}: 超过项目规定的 {AIGC_MAX_FIELD_CHARACTERS} 字符上限"
-            )
+    if enforce_project_lengths:
+        for field in AIGC_FIELD_ORDER:
+            if len(aigc[field]) > AIGC_MAX_FIELD_CHARACTERS:
+                errors.append(
+                    f"AIGC.{field}: 超过项目规定的 {AIGC_MAX_FIELD_CHARACTERS} 字符上限"
+                )
     if strict_characters:
         for field in AIGC_FIELD_ORDER:
             value = aigc[field]
@@ -91,6 +97,15 @@ def validate_aigc_business_rules(
                 "AIGC.PropagateID: 首次写入时必须等于 ProduceID"
             )
     return errors
+
+
+def validate_project_policy(document: Any) -> list[str]:
+    """返回项目安全/兼容性限制，不把这些限制冒充为国标结论。"""
+    return validate_aigc_business_rules(
+        document,
+        strict_characters=True,
+        require_initial_relationships=False,
+    )
 
 
 def serialize_aigc_document(document: dict) -> str:

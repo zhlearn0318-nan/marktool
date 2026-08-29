@@ -34,7 +34,8 @@ async def detect(file: UploadFile = File(...),
     aigc = ctx.cache.get("aigc_metadata")
     report = build_report(items, aigc)
     result = DetectionResult(result_id=result_id, filename=file.filename or "image",
-                             modality="image", items=items, aigc_metadata=aigc)
+                             modality="image", items=items, aigc_metadata=aigc,
+                             metadata_compliance=ctx.cache.get("metadata_compliance"))
     payload = {
         "result_id": result_id,
         "detection": result.model_dump(),

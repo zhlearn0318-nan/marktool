@@ -29,6 +29,8 @@ class AIGCRecord:
     """从一个 XMP 属性中读取到的 AIGC 记录。"""
 
     raw_value: str
+    property_name: str = "unknown-aigc-property"
+    packet_location: str = "xmp"
     document: Any = None
     aigc: Optional[dict] = None
     parse_error: Optional[str] = None
@@ -170,58 +172,80 @@ def _is_aigc_property(name: str) -> bool:
     return "aigc" in namespace.lower() or "aigc" in local_name.lower()
 
 
-def _candidate_values(raw_xmp: str) -> list[str]:
+def _candidate_values(raw_xmp: str) -> list[tuple[str, str]]:
     """找出名称、完整属性名或命名空间中含 AIGC 的 XMP 值。"""
     try:
         root = ET.fromstring(raw_xmp.strip("\x00\ufeff \t\r\n"))
     except ET.ParseError:
         # XMP 本身损坏时仍要把可识别的 AIGC 项视为“已存在”，防止继续追加。
         values = [
-            html.unescape(match.group("value").strip())
+            (match.group("name"), html.unescape(match.group("value").strip()))
             for match in _FALLBACK_ELEMENT_RE.finditer(raw_xmp)
         ]
         values.extend(
-            html.unescape(match.group("value").strip())
+            (match.group("name"), html.unescape(match.group("value").strip()))
             for match in _FALLBACK_ATTRIBUTE_RE.finditer(raw_xmp)
         )
         return values
 
-    values: list[str] = []
+    values: list[tuple[str, str]] = []
     for element in root.iter():
         if _is_aigc_property(element.tag):
-            values.append("".join(element.itertext()).strip())
+            values.append((element.tag, "".join(element.itertext()).strip()))
         for attribute_name, attribute_value in element.attrib.items():
             if _is_aigc_property(attribute_name):
-                values.append(attribute_value.strip())
+                values.append((attribute_name, attribute_value.strip()))
     return values
 
 
-def _parse_record(raw_value: str) -> AIGCRecord:
+def _parse_record(
+    raw_value: str,
+    *,
+    property_name: str = "unknown-aigc-property",
+    packet_location: str = "xmp",
+) -> AIGCRecord:
     try:
         document = json.loads(raw_value)
     except (json.JSONDecodeError, TypeError) as exc:
         message = exc.msg if hasattr(exc, "msg") else str(exc)
         return AIGCRecord(
             raw_value=raw_value,
+            property_name=property_name,
+            packet_location=packet_location,
             parse_error=f"AIGC 元数据不是合法 JSON: {message}",
         )
 
     if isinstance(document, dict) and isinstance(document.get("AIGC"), dict):
         return AIGCRecord(
             raw_value=raw_value,
+            property_name=property_name,
+            packet_location=packet_location,
             document=document,
             aigc=document["AIGC"],
         )
 
     # 兼容读取旧版“只存七字段内层对象”的记录；严格 Schema 会把它判为不合规。
     legacy_aigc = document if isinstance(document, dict) else None
-    return AIGCRecord(raw_value=raw_value, document=document, aigc=legacy_aigc)
+    return AIGCRecord(
+        raw_value=raw_value,
+        property_name=property_name,
+        packet_location=packet_location,
+        document=document,
+        aigc=legacy_aigc,
+    )
 
 
 def extract_aigc_records(image: Image.Image) -> list[AIGCRecord]:
     records: list[AIGCRecord] = []
-    for packet in raw_xmp_packets(image):
-        records.extend(_parse_record(value) for value in _candidate_values(packet))
+    for packet_index, packet in enumerate(raw_xmp_packets(image)):
+        for property_name, value in _candidate_values(packet):
+            records.append(
+                _parse_record(
+                    value,
+                    property_name=property_name,
+                    packet_location=f"jpeg:standard-xmp[{packet_index}]",
+                )
+            )
     return records
 
 
@@ -232,8 +256,15 @@ def read_aigc_records(file_path: str) -> list[AIGCRecord]:
         if (image.format or "").upper() == "PNG":
             packets = _png_xmp_packets(file_path)
             records: list[AIGCRecord] = []
-            for packet in packets:
-                records.extend(_parse_record(value) for value in _candidate_values(packet))
+            for packet_index, packet in enumerate(packets):
+                for property_name, value in _candidate_values(packet):
+                    records.append(
+                        _parse_record(
+                            value,
+                            property_name=property_name,
+                            packet_location=f"png:xmp-text-chunk[{packet_index}]",
+                        )
+                    )
             return records
         return extract_aigc_records(image)
 

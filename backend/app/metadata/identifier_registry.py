@@ -28,6 +28,9 @@ class IdentifierRegistry(Protocol):
     def reserve(self, document: dict, content_fingerprint: str) -> IdentifierReservation:
         ...
 
+    def lookup(self, role: str, provider: str, content_id: str) -> str | None:
+        ...
+
 
 class _SQLiteReservation:
     def __init__(self, connection: sqlite3.Connection):
@@ -128,3 +131,18 @@ class SQLiteIdentifierRegistry:
             connection.rollback()
             connection.close()
             raise
+
+    def lookup(self, role: str, provider: str, content_id: str) -> str | None:
+        """只读查询编号登记；未登记不等同于国标不合规。"""
+        if role not in {"producer", "propagator"}:
+            raise ValueError("role 只能是 producer 或 propagator")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT content_fingerprint
+                FROM aigc_identifiers
+                WHERE role = ? AND provider = ? AND content_id = ?
+                """,
+                (role, provider, content_id),
+            ).fetchone()
+        return row[0] if row is not None else None

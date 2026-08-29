@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel
 
 
@@ -60,3 +60,4 @@ class DetectionResult(BaseModel):
     modality: str
     items: list[CheckItem]
     aigc_metadata: Optional[dict] = None
+    metadata_compliance: Optional[dict[str, Any]] = None
