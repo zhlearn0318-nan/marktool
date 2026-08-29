@@ -1,6 +1,6 @@
 # AIGC 标识合规平台（MarkTool）
 
-本仓库面向 GB 45438—2025 文件元数据隐式标识，包含图片检测/报告原型（后端 + 前端），以及视频（MP4）后端元数据打标服务。**视频（MP4）打标模块为 ls 分支交付物**，图片适配器由队友负责。
+本仓库面向 GB 45438—2025 文件元数据隐式标识，包含图片检测/报告原型（后端 + 前端），以及视频（MP4）后端元数据打标服务。**视频（MP4）打标模块为 feature/video-metadata 分支交付物**：后端接口与前端打标页均已实现并已打通；图片适配器由队友负责。
 
 ## 当前实现范围
 
@@ -12,7 +12,8 @@
 | 媒体完整性校验 | 已实现 | ffprobe 对比写入前后的时长/分辨率/轨道/编解码器，ffmpeg 解码前 2 秒确认可播放 |
 | 异步任务与持久化 | 已实现 | `/api/v1` 异步创建/查询/下载，SQLite 登记 + 原子发布 + 保留策略 |
 | 图片 XMP 检测与合规评级（MVP） | 已实现 | `/api/detect` 全量检测 → 报告（A / B / C / 不合规） |
-| 前端（源迹 TraceMark） | 已实现 | Vite + React + Antd，上传检测与报告可视化页面 |
+| 前端（源迹 TraceMark）· 检测/报告 | 已实现 | Vite + React + Antd，接入 `/api/detect` 上传检测与报告页 |
+| 视频打标前端页面 | 已实现 | 「视频打标」页：上传 MP4 → 创建任务 → 轮询进度 → 下载结果（接入 `/api/v1`，ProduceID 自动生成） |
 | 图片（JPEG/PNG）打标适配器 | 未实现 | 队友交付；能力开关 `false`，前端据此禁用图片入口 |
 | C2PA 互转、概率检测、数字签名 | 不在本阶段 | 首期只做文件元数据隐式标识 |
 
@@ -21,7 +22,7 @@
 ```text
 .
 ├── backend/             # 检测/报告 MVP：图片 XMP 读取、探针引擎、合规评级（FastAPI）
-├── frontend/            # 源迹 TraceMark：Vite + React + Antd，上传检测 + 报告页
+├── frontend/            # 源迹 TraceMark：Vite + React + Antd，上传检测/报告 + 视频打标页
 ├── labeling-backend/    # 视频（MP4）元数据打标服务（本分支交付）
 │   ├── app/
 │   │   ├── adapters/video.py   # 视频适配器：MP4 写入/回读/replace/媒体完整性
@@ -78,13 +79,13 @@ python -m venv .venv
 ```bash
 # macOS / Linux
 cd labeling-backend
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8002
 ```
 
 ```powershell
 # Windows PowerShell
 cd labeling-backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8002
 ```
 
 ### 检测/报告 MVP（`/api`）
@@ -109,7 +110,7 @@ npm install
 npm run dev
 ```
 
-> npm 命令在 macOS / Windows 下通用。前端监听 `http://localhost:5173`，已配置 `/api` 代理至后端 `:8000`。
+> npm 命令在 macOS / Windows 下通用。前端监听 `http://localhost:5173`，代理规则：`/api` → 后端 `:8000`（检测 MVP），`/api/v1` → 后端 `:8002`（视频打标）。
 
 ## API
 
@@ -122,6 +123,8 @@ npm run dev
 | `POST` | `/api/detect` | 上传图片，全量检测，返回合规报告（MVP） |
 | `GET` | `/api/report/{id}` | 查询历史检测报告（MVP） |
 | `GET` | `/api/health` | 健康检查（MVP） |
+
+> **联调状态**：前端 TraceMark 已接通视频打标——顶部导航「视频打标」页上传 MP4 → `/api/v1/metadata-label-jobs` 创建任务 → 自动轮询进度 → 下载打标结果。`/api/v1` 经 vite 代理转发至 `:8002`（labeling-backend），`/api` 转发至 `:8000`（检测 MVP），两个服务可同时运行。
 
 ## 测试
 
