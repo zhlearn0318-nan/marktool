@@ -12,6 +12,7 @@ import StandardsPage from "./pages/StandardsPage";
 import ApiPage from "./pages/ApiPage";
 import HelpPage from "./pages/HelpPage";
 import ConsolePage from "./pages/ConsolePage";
+import MetadataWorkbenchPage from "./pages/MetadataWorkbenchPage";
 import type { DetectResponse } from "./types";
 import type { View } from "./nav";
 
@@ -50,6 +51,8 @@ export default function App() {
         return <HelpPage onNavigate={setView} />;
       case "console":
         return <ConsolePage onNavigate={setView} />;
+      case "metadata":
+        return <MetadataWorkbenchPage />;
       default:
         return <UploadPage onResult={handleResult} onNavigate={setView} />;
     }

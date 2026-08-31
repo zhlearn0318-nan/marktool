@@ -16,9 +16,9 @@ const BOARDS: { idx: string; title: string; desc: string; live: boolean; view: V
   {
     idx: "板块一",
     title: "打标 / 修复",
-    desc: "发布前自动按法规打好显式与隐式标识；已标识但有缺陷的内容自动修复。",
-    live: false,
-    view: "overview",
+    desc: "完成 JPEG/PNG 文件元数据隐式标识的提取、首次打标、合规检测、修复计划与安全执行。",
+    live: true,
+    view: "metadata",
   },
   {
     idx: "板块二",
