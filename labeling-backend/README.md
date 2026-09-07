@@ -26,6 +26,7 @@ python3 -m venv .venv
 | POST | `/api/v1/metadata-label-jobs` | 创建标注任务（`multipart`: `file` + `request`），返回 `202` |
 | GET | `/api/v1/metadata-label-jobs/{job_id}` | 查询状态/阶段/结果 |
 | GET | `/api/v1/metadata-label-jobs/{job_id}/output` | 下载结果文件（仅 `succeeded`） |
+| POST | `/api/v1/compliance-inspect` | 合规检测（`multipart`: `file`，只读）：同步返回 GB45438 合规报告（`conclusion`/`reason_code`/`media_status`/…） |
 | GET | `/api/v1/health` | 健康检查 + 能力列表 |
 
 `request` 示例：
