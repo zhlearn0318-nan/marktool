@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .api import health, jobs
+from .api import health, inspect, jobs
 from .api.schema import error_response
 from .config import Settings, load_settings
 from .core import util
@@ -81,6 +81,7 @@ def create_app(settings: Settings | None = None,
 
     app.include_router(health.router)
     app.include_router(jobs.router)
+    app.include_router(inspect.router)
     return app
 
 

@@ -19,10 +19,30 @@ class ReaderError(Exception):
 
 @dataclass
 class AIGCRecord:
-    """文件内找到的一份 AIGC 标识。tag_key 形如 'XMP:AIGC'、'QuickTime:Comment'。"""
+    """文件内找到的一份 AIGC 标识。tag_key 形如 'XMP:AIGC'、'QuickTime:Comment'。
+
+    location：人类可读的载体位置（物理落点探测见 2026-09-07：规范 XMP 在顶层
+    Adobe-XMP uuid 盒；QuickTime 旧载体在 moov/udta/meta/ilst）。仅用于诊断文案，
+    不影响判定逻辑。
+    """
     tag_key: str
     raw: str
     aigc: dict | None          # 解析成功的内层 AIGC 对象，否则 None
+    location: str | None = None
+
+
+def carrier_location(tag_key: str) -> str | None:
+    """按 ExifTool 组把 tag_key 映射成载体位置描述（诊断用，仅增不改判定）。
+
+    - XMP（规范新载体）：顶层 Adobe-XMP uuid 盒（usertype be7acfcb…）内 XMP 包。
+    - QuickTime（旧载体）：moov/udta/meta/ilst 的数据原子（如 ©cmt）。
+    其余（uuid 盒、其他命名空间）返回 None，交由上层用 tag_key 原文兜底。
+    """
+    if tag_key.startswith("XMP"):
+        return "XMP 新载体（顶层 Adobe-XMP uuid 盒内 XMP 包）"
+    if tag_key.startswith("QuickTime"):
+        return "QuickTime 旧载体（moov/udta/meta/ilst 数据原子）"
+    return None
 
 
 def exiftool_tags(path: str, exiftool: str, config: str | None) -> dict:
@@ -44,13 +64,23 @@ def exiftool_tags(path: str, exiftool: str, config: str | None) -> dict:
     return data[0] if data else {}
 
 
+# exiftool 的结构回显字段：值是文件路径/名称/类型等磁盘属性，不是文件内可承载
+# 标识的元数据。国标隐式标识只可能写在 XMP / QuickTime 等媒体元数据标签里；
+# 若不排除，仓库/上传路径含 "AIGC" 字样时 SourceFile、File:Directory 的值会把
+# 干净文件误判为"已有标识"。
+_ECHO_PREFIXES = ("SourceFile", "File:", "ExifTool:")
+
+
 def _looks_like_aigc(tag_key: str, value: str) -> bool:
     """标签名含 AIGC，或值内含 "AIGC" 字样（子串匹配）。
 
     与现有检测器 aigc_check.py 的判定（`"AIGC" in v`）保持一致（手册 §14），
     避免"写入器认识、检测器不认识"的分叉。值中出现 AIGC 字样的标签按已有
-    标识对待（reject 时保守拒绝，replace 时整体移除）。
+    标识对待（reject 时保守拒绝，replace 时整体移除）。结构回显字段除外——
+    它们不是候选载体。
     """
+    if tag_key.startswith(_ECHO_PREFIXES):
+        return False
     return "AIGC" in tag_key or "AIGC" in value
 
 
@@ -63,5 +93,7 @@ def read_aigc_records(path: str, exiftool: str = "exiftool",
         values = [str(v) for v in val] if isinstance(val, list) else [str(val)]
         for v in values:
             if _looks_like_aigc(key, v):
-                records.append(AIGCRecord(tag_key=key, raw=v, aigc=aigc.parse_aigc(v)))
+                records.append(AIGCRecord(tag_key=key, raw=v,
+                                          aigc=aigc.parse_aigc(v),
+                                          location=carrier_location(key)))
     return records
