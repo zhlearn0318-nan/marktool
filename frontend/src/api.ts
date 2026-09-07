@@ -1,4 +1,10 @@
-import type { DetectResponse, HealthResponse, LabelJobRequest, LabelJobResponse } from "./types";
+import type {
+  ComplianceReport,
+  DetectResponse,
+  HealthResponse,
+  LabelJobRequest,
+  LabelJobResponse,
+} from "./types";
 
 export async function detectImage(
   file: File,
@@ -11,6 +17,22 @@ export async function detectImage(
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "请求失败" }));
     throw new Error(err.detail || "检测失败");
+  }
+  return res.json();
+}
+
+/** MP4 合规检测（POST /api/v1/compliance-inspect，只读，同步返回报告） */
+export async function inspectVideo(file: File): Promise<ComplianceReport> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/v1/compliance-inspect", { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    const msg =
+      (err && err.error && err.error.message) ||
+      (err && err.detail) ||
+      `合规检测失败（HTTP ${res.status}）`;
+    throw new Error(msg);
   }
   return res.json();
 }
