@@ -86,6 +86,149 @@ export interface HealthResponse {
   capabilities: Record<string, boolean>;
 }
 
+/* ===== 修复工作台（/api/v1/metadata-repair-*，仅 JPEG/PNG） =====
+
+   流程是「计划 → 显式确认 → 异步执行 → 审计」四步，且计划不可直接执行：
+   必须先 POST 计划拿到 plan_id + plan_hash，确认时原样回传这两个值，
+   后端据此校验「人看到的那份计划」与「要执行的那份计划」是同一份。 */
+
+export type RepairRepairability = "confirmable" | "manual_review" | "forbidden" | "not_applicable";
+
+/** 可信来源类型。修复**不新增标识**，所以这里全部是「已有标识的来源可被证实」
+ *  的途径；没有 derived_from_file —— 那是系统自己从文件推导出来的，不由调用方声明。 */
+export type RepairSourceType =
+  | "identifier_registry"
+  | "audit_history"
+  | "verified_provider_record"
+  | "authorized_manual";
+
+/** 计划里回带的来源：上面四种，外加系统派生的「原文件记录」。 */
+export type RepairPlanSourceType = RepairSourceType | "derived_from_file";
+
+export type RepairWriteContext = "unknown" | "initial_generation" | "propagation";
+
+/** 计划参数的可选部分。
+ *
+ *  只在「标识存在、但已损坏到无法从文件恢复」时才有意义：它让操作人用一份
+ *  权威七字段整体覆盖旧记录，而不是让系统去猜。注意它**救不了两种情形**——
+ *  文件里压根没标识（not_found，应走打标流程），或存在 Extended XMP /
+ *  C2PA 未验签 / 交叉读取失败等阻塞项。这两种情况下后端在读到可信来源之前
+ *  就已判定不可执行，前端不要承诺能靠填表绕过。 */
+export interface RepairPlanOptions {
+  trusted_input?: {
+    AIGC: LabelJobRequest["AIGC"];
+    source_type: RepairSourceType;
+    /** 来源凭证，1–500 字符。审计要凭它回溯，必填。 */
+    source_reference: string;
+    write_context: RepairWriteContext;
+  };
+}
+
+export interface RepairFieldChange {
+  field: string;
+  before: unknown;
+  after: unknown;
+  reason: string;
+}
+
+export interface RepairPlanDraft {
+  repairability: RepairRepairability;
+  executable: boolean;
+  source_type?: RepairPlanSourceType | null;
+  source_reference?: string | null;
+  write_context: RepairWriteContext;
+  proposed_document?: { AIGC: Record<string, unknown> } | null;
+  actions: string[];
+  field_changes: RepairFieldChange[];
+  /** 阻塞项：为真时 executable 必为 false，界面必须显式列出而不是只灰掉按钮 */
+  blocking_reasons: string[];
+  warnings: string[];
+}
+
+/** 计划里的检测块，字段与队友检测器的 model_dump 一致 */
+export interface RepairInspection {
+  conclusion: ComplianceConclusion;
+  reason_codes: string[];
+  repairability: "confirmable" | "manual_review" | "forbidden" | "not_applicable";
+  detected_format: string;
+  mime_type: string;
+  file_sha256: string;
+  pixel_sha256: string;
+  record_count: number;
+  aigc_metadata?: { AIGC?: Record<string, unknown> } | null;
+  issues: ComplianceIssue[];
+  project_policy: { accepted: boolean; errors: string[] };
+  cross_reader: { status: string; detail?: string | null };
+  source_verification: { status: string; details: string[] };
+  c2pa_presence: { status: string; carrier?: string | null; detail?: string | null };
+  extended_xmp: boolean;
+}
+
+export interface RepairPlanResponse {
+  request_id: string;
+  plan_id: string;
+  job_id: string | null;
+  /** pending / expired / confirmed …（expired 后不可再执行，但原件仍按保留期留存） */
+  status: string;
+  created_at: string;
+  expires_at: string;
+  input: {
+    original_file_name: string;
+    detected_mime_type: string;
+    size_bytes: number;
+    sha256: string;
+    pixel_sha256: string;
+    /** 原文件是否还在（过期清理后为 false，此时不能再确认执行） */
+    available: boolean;
+    expires_at: string | null;
+  };
+  inspection: RepairInspection;
+  repair_plan: RepairPlanDraft;
+  plan_hash: string;
+  confirmation: {
+    required: boolean;
+    identity_verified: boolean;
+    method: string | null;
+    operator_label: string | null;
+  };
+  links: { self: string; create_job: string; job: string | null };
+}
+
+export interface RepairJobResponse {
+  request_id: string;
+  job_id: string;
+  plan_id: string;
+  status: string;
+  stage: string;
+  progress: number | null;
+  created_at: string;
+  updated_at?: string;
+  input: { original_file_name: string | null; sha256: string | null };
+  confirmation: {
+    method: string | null;
+    operator_label: string | null;
+    identity_verified: boolean;
+  };
+  output?: {
+    file_name: string;
+    mime_type: string;
+    size_bytes: number;
+    sha256: string;
+    available: boolean;
+    download_url: string | null;
+    expires_at: string;
+  } | null;
+  /** 修复后的复检：post_repair_conclusion 应为 compliant，
+   *  pixel_sha256_unchanged 必须为 true（修复只动元数据，不动像素） */
+  validation?: {
+    post_repair_conclusion?: string;
+    pixel_sha256_unchanged?: boolean;
+    post_repair_inspection?: Record<string, unknown>;
+  } | null;
+  error?: { code: string; message: string; retryable: boolean } | null;
+  links: { self: string; output: string | null };
+}
+
 /* ===== 合规检测（POST /api/v1/compliance-inspect 只读，JPEG/PNG/MP4 同构报告） ===== */
 
 export type ComplianceConclusion =

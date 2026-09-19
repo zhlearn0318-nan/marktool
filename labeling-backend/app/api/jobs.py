@@ -21,6 +21,7 @@ from ..core.errors import (AIGC_CHARACTER_INVALID, AIGC_METADATA_EXISTS,
                            AIGC_SCHEMA_INVALID, FILE_TOO_LARGE, INTERNAL_ERROR,
                            INVALID_MULTIPART, JOB_NOT_FOUND,
                            MODALITY_MISMATCH, UNSUPPORTED_MEDIA_TYPE, ApiError)
+from ..core.image_bridge import read_existing_records
 from ..core.mimetype import detect_mime
 from ..core.storage import FileStorage
 from ..core.store import JobStore
@@ -126,22 +127,37 @@ async def create_job(
                        "声明模态与文件真实类型不一致，请重新选择模态。")
 
     # ---- 已有标识检查（§9.1 第 8 步 / §9.3）----
-    adapter = get_adapter(mime, exiftool=settings.paths.exiftool,
-                          ffprobe=settings.paths.ffprobe,
-                          ffmpeg=settings.paths.ffmpeg,
-                          exiftool_config=settings.paths.exiftool_config)
-    try:
-        records = adapter.detect_existing(path)
-    except AdapterError as e:
-        storage.discard(path)
-        raise ApiError(500, INTERNAL_ERROR, f"元数据读取失败: {e}")
-    if records and policy == jobs.POLICY_REJECT:
+    # 图片与视频的读取器不同：图片走图片模块的读取器，与其写入/检测同源（§14）
+    if mime in ("image/jpeg", "image/png"):
+        try:
+            found = read_existing_records(path)
+        except (OSError, ValueError) as e:
+            # 图片读取器对结构损坏/截断的文件抛 OSError；这是**文件本身**的问题
+            # 而非服务故障，与 /compliance-inspect 对同一文件的判定保持一致（415）。
+            storage.discard(path)
+            raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
+                           f"文件结构损坏或不完整，无法读取元数据：{e}") from None
+        tags = [r.property_name for r in found]
+        count = len(found)
+    else:
+        adapter = get_adapter(mime, exiftool=settings.paths.exiftool,
+                              ffprobe=settings.paths.ffprobe,
+                              ffmpeg=settings.paths.ffmpeg,
+                              exiftool_config=settings.paths.exiftool_config)
+        try:
+            found = adapter.detect_existing(path)
+        except AdapterError as e:
+            storage.discard(path)
+            raise ApiError(500, INTERNAL_ERROR, f"元数据读取失败: {e}")
+        tags = [r.tag_key for r in found]
+        count = len(found)
+
+    if count and policy == jobs.POLICY_REJECT:
         storage.discard(path)
         raise ApiError(409, AIGC_METADATA_EXISTS,
                        "文件已存在 AIGC 隐式标识，且策略为拒绝。",
                        [{"field": "existing_metadata_policy",
-                         "reason": f"在 {len(records)} 处标签中发现已有标识："
-                                   f"{[r.tag_key for r in records]}"}])
+                         "reason": f"在 {count} 处标签中发现已有标识：{tags}"}])
 
     # ---- 创建任务并提交执行（§8.2）----
     job_id = "job_" + uuid.uuid4().hex

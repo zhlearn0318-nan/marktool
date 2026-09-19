@@ -7,14 +7,26 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from . import jobs, util
 from .errors import INTERNAL_ERROR
 from ..adapters import AdapterError, get_adapter
+from .image_bridge import build_client, resolve_registry_path
 from .mimetype import suffix_for_mime
 from .storage import FileStorage, safe_display_name
 from .store import JobStore
+
+# 图片侧写入由 app.metadata.image_adapter 承担（与合规检测同源，§14）
+_IMAGE_MIMES = frozenset({"image/jpeg", "image/png"})
+
+# 图片写入服务上报的阶段 → 本项目任务阶段（§8.1）
+_IMAGE_STAGE = {
+    "writing_metadata": jobs.STAGE_WRITING,
+    "verifying_metadata": jobs.STAGE_VERIFYING_METADATA,
+    "publishing_output": jobs.STAGE_PUBLISHING,
+}
 
 
 class PipelineError(Exception):
@@ -42,6 +54,13 @@ def run_job(job_id: str, store: JobStore, storage: FileStorage,
 
 
 def _execute(job: dict, store: JobStore, storage: FileStorage, settings: Any) -> None:
+    # §4.5：图片与视频共用同一套任务接口，但载体实现分属两条交付线。
+    if job["detected_mime_type"] in _IMAGE_MIMES:
+        return _execute_image(job, store, storage, settings)
+    return _execute_video(job, store, storage, settings)
+
+
+def _execute_video(job: dict, store: JobStore, storage: FileStorage, settings: Any) -> None:
     job_id = job["job_id"]
     mime = job["detected_mime_type"]
     # 图片与视频共用本流水线，暂存/输出命名一律按真实 MIME 取后缀（§12.2）
@@ -129,6 +148,89 @@ def _execute(job: dict, store: JobStore, storage: FileStorage, settings: Any) ->
         carrier=adapter.carrier_id,
         expires_at=expires,
         embedded_aigc={"AIGC": embedded},
+        validation=validation,
+        audit=audit,
+    )
+
+
+def _image_service(settings: Any):
+    """构造图片写入服务（ExifTool 客户端 + 编号登记库 + 写入适配器）。"""
+    from ..metadata.identifier_registry import SQLiteIdentifierRegistry
+    from ..metadata.image_adapter import ImageMetadataService
+
+    client = build_client(settings.paths.exiftool, settings.paths.exiftool_config)
+    registry = SQLiteIdentifierRegistry(resolve_registry_path(settings))
+    return ImageMetadataService(client, registry)
+
+
+def _execute_image(job: dict, store: JobStore, storage: FileStorage,
+                   settings: Any) -> None:
+    """图片打标：整条写入链路由 app.metadata.image_adapter 完成。
+
+    与视频分支的差别在于职责边界：图片写入服务自己就把
+    「写入前交叉读取 → 策略 → 写入 → 回读校验 → 媒体完整性 → 原子发布 →
+    编号登记（失败则撤回结果）」做完了，所以这里**不再**调用
+    ``_verify_readback`` 与 ``adapter.media_integrity_check``——那会变成
+    同一件事的第二套实现，正是合并时要消除的东西。
+    """
+    from ..metadata.image_adapter import ExistingMetadataPolicy, ImageMetadataError
+
+    job_id = job["job_id"]
+    suffix = suffix_for_mime(job["detected_mime_type"])
+    original_path = storage.original_path(job["original_stored_name"])
+    submitted = json.loads(job["submitted_aigc"])
+    audit = json.loads(job.get("audit") or "{}")
+    audit["policy"] = job["existing_metadata_policy"]
+
+    store.update(job_id, status=jobs.RUNNING, stage=jobs.STAGE_INSPECTING_FILE,
+                 updated_at=util.now_iso())
+
+    # 写入服务要求目标文件尚不存在，并自行原子发布到该路径
+    output_stored = storage.new_stored_name(suffix)
+    output_path = storage.output_path(output_stored)
+
+    def on_stage(stage: str) -> None:
+        store.update(job_id, stage=_IMAGE_STAGE.get(stage, stage),
+                     updated_at=util.now_iso())
+
+    try:
+        result = _image_service(settings).write(
+            str(original_path), str(output_path), {"AIGC": submitted},
+            policy=ExistingMetadataPolicy(job["existing_metadata_policy"]),
+            initial_write=True,
+            stage_callback=on_stage,
+        )
+    except ImageMetadataError as e:
+        # 错误码词表与视频侧一致，直接透传（前端按 code 展示）
+        raise PipelineError(e.code, str(e), retryable=False) from None
+    except OSError as e:
+        raise PipelineError(jobs.METADATA_WRITE_FAILED, f"图片写入失败: {e}") from None
+
+    final_path = Path(result.output_path)
+    validation = {
+        "read_back_succeeded": result.validation.read_back_succeeded,
+        "schema_valid": result.validation.schema_valid,
+        "single_aigc_record": result.validation.single_aigc_record,
+        "media_integrity_valid": result.validation.media_integrity_valid,
+    }
+    audit["adapter_version"] = result.adapter_version
+    audit["input_sha256"] = result.input_sha256
+
+    original_display = safe_display_name(job["original_file_name"])
+    stem = original_display.rsplit(".", 1)[0] if "." in original_display else original_display
+    store.update(
+        job_id, status=jobs.SUCCEEDED, stage=jobs.STAGE_COMPLETED, progress=100,
+        updated_at=util.now_iso(),
+        output_file_name=f"{stem}_labeled{suffix}",
+        output_mime_type=result.mime_type,
+        output_size_bytes=final_path.stat().st_size,
+        output_sha256=result.output_sha256,
+        output_stored_name=output_stored,
+        carrier=result.carrier,
+        expires_at=util.add_hours_iso(job["created_at"],
+                                      settings.storage.output_retention_hours),
+        # 图片服务的 embedded_metadata 已是外层 {"AIGC": {...}}，与视频侧同形
+        embedded_aigc=result.embedded_metadata,
         validation=validation,
         audit=audit,
     )

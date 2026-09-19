@@ -4,6 +4,9 @@ import type {
   HealthResponse,
   LabelJobRequest,
   LabelJobResponse,
+  RepairJobResponse,
+  RepairPlanOptions,
+  RepairPlanResponse,
 } from "./types";
 
 export async function detectImage(
@@ -87,5 +90,79 @@ export async function getLabelJob(jobId: string): Promise<LabelJobResponse> {
 export async function downloadLabelJob(jobId: string): Promise<Blob> {
   const res = await fetch(`/api/v1/metadata-label-jobs/${jobId}/output`);
   if (!res.ok) throw new Error("下载结果文件失败");
+  return res.blob();
+}
+
+/* ===== 修复工作台（/api/v1/metadata-repair-*） ===== */
+
+/** 统一解出后端错误信封 {error:{code,message,details}}。
+ *  修复工作台的失败**几乎都是业务性拒绝**（计划冲突 / 不可执行 / 来源不可信），
+ *  只显示 HTTP 状态码会让人以为是服务器坏了，必须把 code 带出来。 */
+async function repairError(res: Response, fallback: string): Promise<Error> {
+  const body = await res.json().catch(() => null);
+  const err = body?.error ?? body?.detail ?? null;
+  const code = err?.code ? `${err.code}: ` : "";
+  const message = err?.message || (typeof err === "string" ? err : "") || fallback;
+  const details: { field: string; reason: string }[] = err?.details ?? [];
+  const tail = details.length
+    ? `（${details.map((d) => `${d.field} ${d.reason}`).join("；")}）`
+    : "";
+  return new Error(`${code}${message}${tail}（HTTP ${res.status}）`);
+}
+
+/** 第一步：上传图片，生成修复计划（POST /api/v1/metadata-repair-plans）。
+ *  只生成计划、不落任何改动；有可信来源时经 options.trusted_input 传入。 */
+export async function createRepairPlan(
+  file: File,
+  options?: RepairPlanOptions
+): Promise<RepairPlanResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  if (options?.trusted_input) form.append("request", JSON.stringify(options));
+  const res = await fetch("/api/v1/metadata-repair-plans", { method: "POST", body: form });
+  if (!res.ok) throw await repairError(res, "生成修复计划失败");
+  return res.json();
+}
+
+/** 重新拉取计划（GET /api/v1/metadata-repair-plans/{plan_id}） */
+export async function getRepairPlan(planId: string): Promise<RepairPlanResponse> {
+  const res = await fetch(`/api/v1/metadata-repair-plans/${planId}`);
+  if (!res.ok) throw await repairError(res, "查询修复计划失败");
+  return res.json();
+}
+
+/** 第二步：显式确认后才会真正执行（POST /api/v1/metadata-repair-jobs）。
+ *  plan_hash 必须与计划页展示的那一份一致，否则后端按 409 计划冲突拒绝 ——
+ *  这是防止「看到的计划」与「执行的计划」不是同一份的护栏，不要在前端改写它。 */
+export async function confirmRepairPlan(
+  planId: string,
+  planHash: string,
+  operatorLabel: string
+): Promise<RepairJobResponse> {
+  const res = await fetch("/api/v1/metadata-repair-jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      plan_id: planId,
+      plan_hash: planHash,
+      confirmed: true,
+      operator_label: operatorLabel,
+    }),
+  });
+  if (!res.ok) throw await repairError(res, "确认修复失败");
+  return res.json();
+}
+
+/** 第三步：轮询修复任务（GET /api/v1/metadata-repair-jobs/{job_id}） */
+export async function getRepairJob(jobId: string): Promise<RepairJobResponse> {
+  const res = await fetch(`/api/v1/metadata-repair-jobs/${jobId}`);
+  if (!res.ok) throw await repairError(res, "查询修复任务失败");
+  return res.json();
+}
+
+/** 第四步：下载修复结果文件（GET /api/v1/metadata-repair-jobs/{job_id}/output） */
+export async function downloadRepairOutput(jobId: string): Promise<Blob> {
+  const res = await fetch(`/api/v1/metadata-repair-jobs/${jobId}/output`);
+  if (!res.ok) throw await repairError(res, "下载修复结果失败");
   return res.blob();
 }

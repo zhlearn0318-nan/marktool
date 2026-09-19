@@ -6,4 +6,13 @@ storage/
 jobs.db
 *.db-journal
 
+# 修复模块 MetadataRepairConfig.from_environment() 的默认根目录。
+# 应用内已统一改用 storage/（见 app/core/image_bridge.py::build_repair_service），
+# 这条只是兜住"绕过应用装配直接构造服务"时冒出来的运行产物。
+data/
+
+# 图片检测/修复的编号登记库与修复库（跟随 storage/ 之外的显式配置）
+metadata_repairs.sqlite3
+aigc_identifiers.sqlite3
+
 .DS_Store

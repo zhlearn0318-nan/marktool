@@ -7,12 +7,11 @@ from __future__ import annotations
 
 from .base import AdapterError, BaseAdapter, MediaReport
 from .video import Mp4Adapter
-from .image import ImageAdapter  # 扩展点：图片适配器由队友实现
 
+# 图片不在此注册：其读写由 app.metadata.image_adapter 承担（与合规检测同源，§14），
+# 走 app/core/pipeline.py::_execute_image 分支。留在这里会形成第二套图片实现。
 _ADAPTERS = {
     "video/mp4": Mp4Adapter,
-    "image/jpeg": ImageAdapter,
-    "image/png": ImageAdapter,
 }
 
 
@@ -27,4 +26,4 @@ def get_adapter(mime: str, exiftool: str = "exiftool",
 
 
 __all__ = ["AdapterError", "BaseAdapter", "MediaReport", "get_adapter",
-           "Mp4Adapter", "ImageAdapter"]
+           "Mp4Adapter"]

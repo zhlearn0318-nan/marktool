@@ -14,6 +14,7 @@ import HelpPage from "./pages/HelpPage";
 import ConsolePage from "./pages/ConsolePage";
 import LabelingPage from "./pages/LabelingPage";
 import MediaInspectPage from "./pages/MediaInspectPage";
+import RepairPage from "./pages/RepairPage";
 import type { DetectResponse } from "./types";
 import type { View } from "./nav";
 
@@ -56,6 +57,8 @@ export default function App() {
         return <LabelingPage />;
       case "mediaInspect":
         return <MediaInspectPage />;
+      case "mediaRepair":
+        return <RepairPage onNavigate={setView} />;
       default:
         return <UploadPage onResult={handleResult} onNavigate={setView} />;
     }

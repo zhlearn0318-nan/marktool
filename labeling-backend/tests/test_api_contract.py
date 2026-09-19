@@ -162,7 +162,7 @@ def test_image_roundtrip_uses_image_carrier(client):
 
     done = _wait_terminal(client, r.json()["job_id"])
     assert done["status"] == "succeeded", done
-    assert done["output"]["carrier"] == "image-xmp-aigc-v1"
+    assert done["output"]["carrier"] == "xmp-aigc-v1"
     assert done["validation"]["read_back_succeeded"] is True
     assert done["validation"]["single_aigc_record"] is True
     assert done["validation"]["media_integrity_valid"] is True
@@ -294,7 +294,11 @@ def test_image_existing_reject_409(client, labeled_png):
 
 def test_image_existing_replace_single_record(client, labeled_png):
     """已有标识 + replace → 成功且回落成单份标识。"""
-    other = {**VALID_AIGC, "ProduceID": "0198F21A-6F28-7000-A102-999999999999"}
+    # 两个编号必须一起换：国标要求首次写入时传播方=生产者、传播编号=生产编号，
+    # 图片写入服务会强制这条（AIGC_INITIAL_RELATION_INVALID）。
+    other = {**VALID_AIGC,
+             "ProduceID": "0198F21A-6F28-7000-A102-999999999999",
+             "PropagateID": "0198F21A-6F28-7000-A102-999999999999"}
     r = _upload(client, labeled_png, other, modality="image",
                 policy="replace", fname="again.png", content_type="image/png")
     assert r.status_code == 202, r.text
@@ -319,15 +323,18 @@ def test_image_extension_spoofing_follows_content(client, jpeg_bytes):
     assert r.status_code == 202, r.text
     done = _wait_terminal(client, r.json()["job_id"])
     assert done["status"] == "succeeded", done
-    assert done["output"]["carrier"] == "image-xmp-aigc-v1"
+    assert done["output"]["carrier"] == "xmp-aigc-v1"
     assert done["output"]["mime_type"] == "image/jpeg"
 
 
-def test_image_corrupt_fails_integrity(client, png_bytes):
-    """截断 PNG：媒体完整性校验必须拦下，任务判失败而非静默产出坏文件。"""
+def test_image_corrupt_rejected_415(client, png_bytes):
+    """截断 PNG：结构损坏在读元数据时就暴露，请求期直接 415，不建任务。
+
+    这与 /compliance-inspect 对同一份文件的判定一致（同样 415）——
+    文件本身的问题不是服务故障，不该报成 500 内部错误，也不该建一个注定失败的任务。
+    """
     r = _upload(client, png_bytes[:60], VALID_AIGC, modality="image",
                 fname="broken.png", content_type="image/png")
-    assert r.status_code == 202, r.text
-    done = _wait_terminal(client, r.json()["job_id"])
-    assert done["status"] == "failed", done
-    assert done["error"]["code"]
+    assert r.status_code == 415, r.text
+    assert r.json()["error"]["code"] == "UNSUPPORTED_MEDIA_TYPE"
+

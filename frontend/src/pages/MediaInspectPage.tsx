@@ -3,6 +3,7 @@ import { Alert, Collapse, Tag, Upload, message } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
 import { getHealth, inspectMedia } from "../api";
+import { C2PA_ZH, MEDIA_STATUS_ZH, REASON_ZH, REPAIR_ZH } from "../reasonCodes";
 import type {
   ComplianceCandidate,
   ComplianceConclusion,
@@ -34,39 +35,6 @@ const CONCLUSION_META: Record<
     alert: "warning",
     desc: "元数据载体不可完整读取（结构损坏 / 截断 / 工具分歧），停止自动处理，需人工复核。",
   },
-};
-
-const REASON_ZH: Record<string, string> = {
-  DUPLICATE_RECORDS: "检测到多份 AIGC 标识（国标要求同一文件仅保留一份）",
-  MISSING_FIELD: "缺失必填字段，或身份/编号字段为空",
-  BAD_JSON: "元数据值无法解析为国标结构（JSON 非法或缺外层 AIGC 对象）",
-  BAD_LABEL: "Label 取值非法（必须是字符串 1 / 2 / 3）",
-  UNKNOWN_FIELD: "国标对象外存在字段",
-  LEGACY_CARRIER: "旧载体 QuickTime:Comment（存在正式迁移规则）",
-  CHARSET: "字段含国标规定字符范围外的字符，需人工复核",
-  FIRST_WRITE_MISMATCH: "传播方/传播编号与制作者不一致（可能是合法二次传播）",
-  // 图片与视频共用这个码，文案保持格式中立（后端会在问题清单里给具体原因）
-  UNREADABLE_CARRIER: "元数据载体不可完整读取（结构损坏 / 截断 / 编码异常）",
-  REGISTRY_MISMATCH: "编号登记库核对不一致",
-  TOOL_DIVERGENCE: "读取工具结果分歧",
-};
-
-const REPAIR_ZH: Record<string, string> = {
-  auto_fixable: "可确定修复（去重 / Label 转字符串 / 补空值保留字段）",
-  needs_human: "需人工确认（来源不明 / 冲突 / 身份缺失，不猜测不乱修）",
-  forbidden: "禁止修复（需猜测来源或伪造编号）",
-};
-
-const MEDIA_STATUS_ZH: Record<string, string> = {
-  ok: "正常可读",
-  degraded: "降级（视频流不可解）",
-  unreadable: "不可读",
-};
-
-const C2PA_ZH: Record<string, string> = {
-  absent: "未发现 C2PA",
-  present_unverified: "存在 C2PA（未验签）",
-  indeterminate: "无法判断",
 };
 
 const SEVERITY_TAG: Record<string, "error" | "warning" | "default"> = {
@@ -171,6 +139,12 @@ export default function MediaInspectPage() {
   }
 
   const meta = CONCLUSION_META[report?.conclusion ?? "indeterminate"];
+  // 「合规」「未检出标识」这两档的码只是把结论重说一遍（AIGC_COMPLIANT /
+  // AIGC_NOT_FOUND），拼进标题是噪音；只有不合规/无法判定时才补原因。
+  const showReason =
+    report?.reason_code &&
+    report.conclusion !== "compliant" &&
+    report.conclusion !== "not_found";
   // 无法判定时的直接原因：后端对每种损坏信号给了不同文案，界面直接挑出来。
   const isIndet = report?.conclusion === "indeterminate";
   const cause = isIndet
@@ -296,7 +270,7 @@ export default function MediaInspectPage() {
                   <Alert
                     type={meta.alert}
                     showIcon
-                    message={`${meta.label}${!isIndet && report.reason_code ? ` · ${REASON_ZH[report.reason_code] ?? report.reason_code}` : ""}`}
+                    message={`${meta.label}${showReason ? ` · ${REASON_ZH[report.reason_code!] ?? report.reason_code}` : ""}`}
                     description={meta.desc}
                   />
 

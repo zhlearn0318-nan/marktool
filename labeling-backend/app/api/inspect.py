@@ -12,6 +12,7 @@ repairability / media_status / c2pa_presence …）。
 from __future__ import annotations
 
 import hashlib
+import time
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
@@ -20,11 +21,12 @@ from ..adapters import AdapterError
 from ..config import Settings
 from ..core.errors import (FILE_TOO_LARGE, INTERNAL_ERROR,
                            UNSUPPORTED_MEDIA_TYPE, ApiError)
-from ..core.image_inspector import ImageComplianceInspector
+from ..core.image_bridge import build_inspector, resolve_registry_path, to_report
 from ..core.inspector import MetadataComplianceInspector
 from ..core.mimetype import detect_mime, suffix_for_mime
 from ..core.reader import ReaderError
 from ..core.storage import FileStorage
+from ..metadata.compliance import ComplianceInspectionError
 from .deps import get_settings, get_storage
 
 router = APIRouter(prefix="/api/v1", tags=["compliance-inspect"])
@@ -71,21 +73,39 @@ async def inspect_media(
         raise ApiError(413, FILE_TOO_LARGE,
                        f"文件超过大小上限（{settings.storage.max_file_bytes // (1024 * 1024)} MB）。")
 
-    # §4.5：按真实文件类型选择检测器，两种模态产出同构报告
-    inspector_cls = (ImageComplianceInspector if mime.startswith("image/")
-                     else MetadataComplianceInspector)
-    inspector = inspector_cls(
-        exiftool=settings.paths.exiftool, ffprobe=settings.paths.ffprobe,
-        ffmpeg=settings.paths.ffmpeg, exiftool_config=settings.paths.exiftool_config)
+    # §4.5：按真实文件类型选择检测器，两种模态产出同构报告。
+    # 图片侧判定逻辑与图片写入侧同源（§14），复用 app.metadata.compliance；
+    # 其富信息由 image_bridge 翻译为统一报告结构，前端无需为模态分叉。
+    is_image = mime.startswith("image/")
+    if is_image:
+        inspector = build_inspector(
+            exiftool=settings.paths.exiftool,
+            exiftool_config=settings.paths.exiftool_config,
+            registry_path=resolve_registry_path(settings))
+    else:
+        inspector = MetadataComplianceInspector(
+            exiftool=settings.paths.exiftool, ffprobe=settings.paths.ffprobe,
+            ffmpeg=settings.paths.ffmpeg, exiftool_config=settings.paths.exiftool_config)
 
     def _run() -> dict:
-        return inspector.inspect(
-            path, file_name=file.filename or "upload", size_bytes=size,
-            sha256=h.hexdigest(), request_id=request_id)
+        if not is_image:
+            return inspector.inspect(
+                path, file_name=file.filename or "upload", size_bytes=size,
+                sha256=h.hexdigest(), request_id=request_id)
+        started = time.monotonic()
+        result = inspector.inspect(str(path))
+        return to_report(
+            str(path), result, file_name=file.filename or "upload",
+            size_bytes=size, sha256=h.hexdigest(), request_id=request_id,
+            elapsed_ms=int((time.monotonic() - started) * 1000))
 
     try:
         # 检测含 ffprobe/解码冒烟/ExifTool 子进程调用，放线程池避免阻塞事件循环
         return await run_in_threadpool(_run)
+    except ComplianceInspectionError as e:
+        # 图片侧对"非可解码的 JPEG/PNG"用 UNSUPPORTED_MEDIA_TYPE 表达
+        status = 415 if e.code == "UNSUPPORTED_MEDIA_TYPE" else 500
+        raise ApiError(status, e.code, str(e)) from None
     except (ReaderError, AdapterError) as e:
         raise ApiError(500, INTERNAL_ERROR, f"合规检测执行失败: {e}") from None
     finally:
