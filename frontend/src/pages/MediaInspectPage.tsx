@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Alert, Collapse, Tag, Upload, message } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
-import { getHealth, inspectVideo } from "../api";
+import { getHealth, inspectMedia } from "../api";
 import type {
   ComplianceCandidate,
   ComplianceConclusion,
@@ -45,7 +45,8 @@ const REASON_ZH: Record<string, string> = {
   LEGACY_CARRIER: "旧载体 QuickTime:Comment（存在正式迁移规则）",
   CHARSET: "字段含国标规定字符范围外的字符，需人工复核",
   FIRST_WRITE_MISMATCH: "传播方/传播编号与制作者不一致（可能是合法二次传播）",
-  UNREADABLE_CARRIER: "MP4 缺少可读取的 moov 元数据载体",
+  // 图片与视频共用这个码，文案保持格式中立（后端会在问题清单里给具体原因）
+  UNREADABLE_CARRIER: "元数据载体不可完整读取（结构损坏 / 截断 / 编码异常）",
   REGISTRY_MISMATCH: "编号登记库核对不一致",
   TOOL_DIVERGENCE: "读取工具结果分歧",
 };
@@ -73,6 +74,10 @@ const SEVERITY_TAG: Record<string, "error" | "warning" | "default"> = {
   warn: "warning",
   info: "default",
 };
+
+/** 与后端能力表一致（§4.5 图片/视频共用同一套检测接口） */
+const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png"];
+const ACCEPT = ".mp4,.jpg,.jpeg,.png,video/mp4,image/jpeg,image/png";
 
 function chip(label: string, value: string | undefined | null, color?: string) {
   return value ? <Tag color={color}>{label}: {value}</Tag> : null;
@@ -118,6 +123,11 @@ function CandidateRow({ cand }: { cand: ComplianceCandidate }) {
           {cand.parseable ? "可解析为国标结构" : "无法解析"}
         </Tag>
       </div>
+      {cand.location ? (
+        <div style={{ color: "var(--text-400)", marginTop: 4, fontSize: 12 }}>
+          位置: {cand.location}
+        </div>
+      ) : null}
       {cand.parsed_fields && cand.parsed_fields.length ? (
         <div style={{ color: "var(--text-400)", marginTop: 4, fontSize: 12 }}>
           已解析字段: {cand.parsed_fields.join(" · ")}
@@ -132,7 +142,7 @@ function CandidateRow({ cand }: { cand: ComplianceCandidate }) {
   );
 }
 
-export default function VideoInspectPage() {
+export default function MediaInspectPage() {
   const [serviceUp, setServiceUp] = useState<boolean | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
@@ -140,19 +150,19 @@ export default function VideoInspectPage() {
 
   useEffect(() => {
     getHealth()
-      .then((h) => setServiceUp(Boolean(h.capabilities?.["video/mp4"])))
+      .then((h) => setServiceUp(SUPPORTED_MIMES.some((m) => h.capabilities?.[m])))
       .catch(() => setServiceUp(false));
   }, []);
 
   async function submit() {
     if (!file) {
-      message.warning("请先选择待检测的 MP4 文件");
+      message.warning("请先选择待检测的文件（MP4 / JPEG / PNG）");
       return;
     }
     setLoading(true);
     setReport(null);
     try {
-      setReport(await inspectVideo(file));
+      setReport(await inspectMedia(file));
     } catch (e) {
       message.error((e as Error).message);
     } finally {
@@ -176,9 +186,9 @@ export default function VideoInspectPage() {
   return (
     <>
       <PageBanner
-        eyebrow="COMPLIANCE · MP4"
-        title="视频合规检测"
-        sub="上传 MP4，按 GB 45438—2025 只读检测已有 AIGC 元数据隐式标识是否合规，全程不改动文件。"
+        eyebrow="COMPLIANCE · MP4 / JPEG / PNG"
+        title="媒体合规检测"
+        sub="上传 MP4 / JPEG / PNG，按 GB 45438—2025 只读检测已有 AIGC 元数据隐式标识是否合规，全程不改动文件。"
       />
 
       <section className="section">
@@ -188,7 +198,7 @@ export default function VideoInspectPage() {
             showIcon
             style={{ marginBottom: 18 }}
             message="合规检测服务不可用"
-            description="无法连接 /api/v1（视频后端，端口 8002）。请先启动后端服务（含 /api/v1/compliance-inspect 接口的版本）后再试。"
+            description="无法连接 /api/v1（labeling-backend，端口 8002）。请先启动后端服务（含 /api/v1/compliance-inspect 接口的版本）后再试。"
           />
         )}
 
@@ -197,11 +207,11 @@ export default function VideoInspectPage() {
           <div className="ui-card">
             <div className="ui-card-head">
               <span className="ico">↑</span>
-              <h3>1 · 上传待检测 MP4</h3>
+              <h3>1 · 上传待检测文件</h3>
             </div>
             <div className="ui-card-body">
               <Upload.Dragger
-                accept="video/mp4,.mp4"
+                accept={ACCEPT}
                 maxCount={1}
                 beforeUpload={(f) => {
                   setFile(f);
@@ -212,8 +222,10 @@ export default function VideoInspectPage() {
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽 MP4 到此处</p>
-                <p className="ant-upload-hint">仅支持 MP4 · 单文件 · 只读检测不修改文件</p>
+                <p className="ant-upload-text">点击或拖拽 MP4 / JPEG / PNG 到此处</p>
+                <p className="ant-upload-hint">
+                  单文件 · 按文件内容判定真实格式 · 只读检测不修改文件
+                </p>
               </Upload.Dragger>
 
               {file ? (
@@ -334,6 +346,12 @@ export default function VideoInspectPage() {
                   <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 8 }}>
                     {chip("置信度", report.confidence === "high" ? "高" : "低")}
                     {chip("媒体状态", MEDIA_STATUS_ZH[report.media_status ?? ""])}
+                    {chip(
+                      "尺寸",
+                      report.media?.width && report.media?.height
+                        ? `${report.media.width}×${report.media.height}`
+                        : undefined
+                    )}
                     {chip("C2PA", C2PA_ZH[report.c2pa_presence] ?? report.c2pa_presence)}
                     {chip("修复", report.repairability ? REPAIR_ZH[report.repairability] : undefined)}
                     {chip("检出记录", String(report.record_count))}
@@ -399,9 +417,17 @@ export default function VideoInspectPage() {
                               检测器: {report.detector_version} · ExifTool:{" "}
                               {report.exiftool_version ?? "-"} · 耗时: {report.elapsed_ms} ms
                               <br />
-                              容器结构: ftyp={String(report.bmff.has_ftyp)} · moov=
-                              {String(report.bmff.has_moov)} · mdat={String(report.bmff.has_mdat)}
-                              {" · "}C2PA uuid: {report.bmff.c2pa_uuid.length}
+                              {/* BMFF box 结构是 MP4 专有；图片报告 applicable=false，整行不显示 */}
+                              {report.bmff.applicable === false ? (
+                                <>载体结构: {report.bmff.note ?? "图片无 BMFF box 结构"}</>
+                              ) : (
+                                <>
+                                  容器结构: ftyp={String(report.bmff.has_ftyp)} · moov=
+                                  {String(report.bmff.has_moov)} · mdat=
+                                  {String(report.bmff.has_mdat)}
+                                  {" · "}C2PA uuid: {report.bmff.c2pa_uuid.length}
+                                </>
+                              )}
                             </div>
                             <div className="code-block">
                               <pre style={{ margin: 0, maxHeight: 280, overflow: "auto" }}>

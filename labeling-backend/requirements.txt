@@ -5,3 +5,5 @@ pydantic>=2.7
 PyYAML>=6.0
 pytest>=8.0
 httpx>=0.27
+# 图片（JPEG/PNG）媒体完整性校验：尺寸 + 像素数据哈希（§6.3）
+pillow>=10.0

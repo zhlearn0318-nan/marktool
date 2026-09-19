@@ -214,6 +214,9 @@ def _is_canonical_tag(tag_key: str) -> bool:
 class MetadataComplianceInspector:
     """统一完成候选扫描、国标判断、问题编码、媒体/box/C2PA 检查。"""
 
+    # 子类（图片检测器）覆盖此值，报告据此区分两种模态的检测器版本
+    detector_version = DETECTOR_VERSION
+
     def __init__(self, exiftool: str = "exiftool", ffprobe: str = "ffprobe",
                  ffmpeg: str = "ffmpeg", exiftool_config: str | None = None):
         self._exiftool = exiftool
@@ -514,11 +517,15 @@ class MetadataComplianceInspector:
                issues: list[Issue], conclusion: str, reason_code: str | None,
                repairability: str | None, c2pa: str, confidence: str,
                registry: dict, file_name: str | None, size_bytes: int | None,
-               sha256: str | None, request_id: str | None, elapsed_ms: int) -> dict:
+               sha256: str | None, request_id: str | None, elapsed_ms: int,
+               detected_mime: str = "video/mp4",
+               bmff_block: dict | None = None) -> dict:
+        """组装报告。图片检测器复用本方法，用 detected_mime/bmff_block 覆盖
+        两个 MP4 专有字段，保证两种模态产出**同构**报告（前端无需分叉渲染）。"""
         report: dict = {
             "request_id": request_id,
             "file_name": file_name,
-            "detected_mime_type": "video/mp4",
+            "detected_mime_type": detected_mime,
             "size_bytes": size_bytes,
             "sha256": sha256,
             "record_count": len(candidates),
@@ -531,9 +538,9 @@ class MetadataComplianceInspector:
             "media_status": media["media_status"],
             "confidence": confidence,
             "media": media,
-            "bmff": probe.to_dict(),
+            "bmff": bmff_block if bmff_block is not None else probe.to_dict(),
             "registry": registry,
-            "detector_version": DETECTOR_VERSION,
+            "detector_version": self.detector_version,
             "exiftool_version": self._exiftool_version(),
             "elapsed_ms": elapsed_ms,
         }

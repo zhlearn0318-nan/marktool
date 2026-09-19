@@ -13,7 +13,7 @@ import ApiPage from "./pages/ApiPage";
 import HelpPage from "./pages/HelpPage";
 import ConsolePage from "./pages/ConsolePage";
 import LabelingPage from "./pages/LabelingPage";
-import VideoInspectPage from "./pages/VideoInspectPage";
+import MediaInspectPage from "./pages/MediaInspectPage";
 import type { DetectResponse } from "./types";
 import type { View } from "./nav";
 
@@ -54,8 +54,8 @@ export default function App() {
         return <ConsolePage onNavigate={setView} />;
       case "labeling":
         return <LabelingPage />;
-      case "videoInspect":
-        return <VideoInspectPage />;
+      case "mediaInspect":
+        return <MediaInspectPage />;
       default:
         return <UploadPage onResult={handleResult} onNavigate={setView} />;
     }

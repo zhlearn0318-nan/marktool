@@ -62,13 +62,30 @@ def _wait_terminal(client, job_id, timeout=30):
     raise AssertionError("任务超时未结束")
 
 
+@pytest.fixture
+def png_bytes():
+    return TINY_PNG
+
+
+@pytest.fixture
+def jpeg_bytes():
+    """1×1 JPEG —— 与 TINY_PNG 同尺寸，用于扩展名伪装用例。"""
+    from common import make_jpeg
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        return make_jpeg(Path(d) / "t.jpg", size=(1, 1)).read_bytes()
+
+
 def test_health_capabilities(client):
     r = client.get("/api/v1/health")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
     assert body["capabilities"]["video/mp4"] is True
-    assert body["capabilities"]["image/png"] is False
+    # 图片能力已按手册 §4.5 接入同一套接口（图片/视频共用契约、分用适配器）
+    assert body["capabilities"]["image/png"] is True
+    assert body["capabilities"]["image/jpeg"] is True
 
 
 def test_create_success_roundtrip(client):
@@ -137,10 +154,25 @@ def test_unsupported_type_415(client):
     assert r.json()["error"]["code"] == "UNSUPPORTED_MEDIA_TYPE"
 
 
-def test_unimplemented_image_adapter_415(client):
-    """图片适配器未实现：上传 PNG 应返回 415 而非进入处理（§7.5 能力开关）。"""
+def test_image_roundtrip_uses_image_carrier(client):
+    """图片走完整流程：载体是图片适配器，四项校验全过（§4.5 分用适配器）。"""
     r = _upload(client, TINY_PNG, VALID_AIGC, modality="image",
                 fname="x.png", content_type="image/png")
+    assert r.status_code == 202, r.text
+
+    done = _wait_terminal(client, r.json()["job_id"])
+    assert done["status"] == "succeeded", done
+    assert done["output"]["carrier"] == "image-xmp-aigc-v1"
+    assert done["validation"]["read_back_succeeded"] is True
+    assert done["validation"]["single_aigc_record"] is True
+    assert done["validation"]["media_integrity_valid"] is True
+    assert done["embedded_metadata"]["AIGC"] == VALID_AIGC
+
+
+def test_unsupported_format_still_415(client):
+    """能力开关仍要拦住真正不支持的格式（防止开关被改坏）。"""
+    r = _upload(client, b"GIF89a" + b"\x00" * 32, VALID_AIGC, modality="image",
+                fname="x.gif", content_type="image/gif")
     assert r.status_code == 415
     assert r.json()["error"]["code"] == "UNSUPPORTED_MEDIA_TYPE"
 
@@ -235,3 +267,67 @@ def test_cleanup_expired_removes_files_and_records(client, tmp_path):
     store.update("job_fail_cleanup", expires_at="2000-01-01T00:00:00Z")
     assert storage.cleanup_expired(store, "2000-01-02T00:00:00Z", (FAILED,)) == 1
     assert store.get("job_fail_cleanup") is None
+
+
+# ---- 图片矩阵（手册 §15.3 图片列，按 HTTP 面完整走一遍）----
+
+@pytest.fixture
+def labeled_png(client, png_bytes):
+    """先打一次标识，得到一个"已有标识"的 PNG 字节流。"""
+    r = _upload(client, png_bytes, VALID_AIGC, modality="image",
+                fname="once.png", content_type="image/png")
+    assert r.status_code == 202, r.text
+    done = _wait_terminal(client, r.json()["job_id"])
+    assert done["status"] == "succeeded", done
+    dl = client.get(done["links"]["output"])
+    assert dl.status_code == 200
+    return dl.content
+
+
+def test_image_existing_reject_409(client, labeled_png):
+    """已有标识 + reject → 409，且不得产生输出。"""
+    r = _upload(client, labeled_png, VALID_AIGC, modality="image",
+                policy="reject", fname="again.png", content_type="image/png")
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "AIGC_METADATA_EXISTS"
+
+
+def test_image_existing_replace_single_record(client, labeled_png):
+    """已有标识 + replace → 成功且回落成单份标识。"""
+    other = {**VALID_AIGC, "ProduceID": "0198F21A-6F28-7000-A102-999999999999"}
+    r = _upload(client, labeled_png, other, modality="image",
+                policy="replace", fname="again.png", content_type="image/png")
+    assert r.status_code == 202, r.text
+    done = _wait_terminal(client, r.json()["job_id"])
+    assert done["status"] == "succeeded", done
+    assert done["validation"]["single_aigc_record"] is True
+    assert done["embedded_metadata"]["AIGC"] == other
+
+
+def test_image_modality_mismatch_422(client, png_bytes):
+    """图片内容却声明 video → 422（后端按内容复核，不信前端）。"""
+    r = _upload(client, png_bytes, VALID_AIGC, modality="video",
+                fname="x.png", content_type="image/png")
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "MODALITY_MISMATCH"
+
+
+def test_image_extension_spoofing_follows_content(client, jpeg_bytes):
+    """JPEG 伪装成 .png/.mp4：按文件头判定，仍走图片适配器（§9.1）。"""
+    r = _upload(client, jpeg_bytes, VALID_AIGC, modality="image",
+                fname="actually_jpeg.png", content_type="image/png")
+    assert r.status_code == 202, r.text
+    done = _wait_terminal(client, r.json()["job_id"])
+    assert done["status"] == "succeeded", done
+    assert done["output"]["carrier"] == "image-xmp-aigc-v1"
+    assert done["output"]["mime_type"] == "image/jpeg"
+
+
+def test_image_corrupt_fails_integrity(client, png_bytes):
+    """截断 PNG：媒体完整性校验必须拦下，任务判失败而非静默产出坏文件。"""
+    r = _upload(client, png_bytes[:60], VALID_AIGC, modality="image",
+                fname="broken.png", content_type="image/png")
+    assert r.status_code == 202, r.text
+    done = _wait_terminal(client, r.json()["job_id"])
+    assert done["status"] == "failed", done
+    assert done["error"]["code"]

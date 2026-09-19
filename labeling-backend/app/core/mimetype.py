@@ -15,3 +15,19 @@ def detect_mime(head: bytes) -> str | None:
 
 
 SUPPORTED_MIMES = ("image/jpeg", "image/png", "video/mp4")
+
+# §12.2 文件命名：结果文件名沿用原格式后缀，图片与视频共用同一条流水线
+SUFFIX_BY_MIME = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "video/mp4": ".mp4",
+}
+
+
+def suffix_for_mime(mime: str) -> str:
+    """按真实 MIME 取结果文件后缀。
+
+    取不到时返回 `.bin`：宁可用中性后缀，也不要给图片错标成 `.mp4`
+    （下游按扩展名打开会直接失败）。
+    """
+    return SUFFIX_BY_MIME.get(mime, ".bin")

@@ -118,9 +118,20 @@ def test_inspect_unsupported_text_415(client):
     assert r.json()["error"]["code"] == "UNSUPPORTED_MEDIA_TYPE"
 
 
-def test_inspect_image_not_enabled_415(client):
-    """图片检测属于另一套 /api/detect MVP，此接口只做 MP4（能力开关）。"""
+def test_inspect_image_enabled_returns_report(client):
+    """图片检测已接入：返回与 MP4 同构的报告（§4.5，前端无需分叉渲染）。"""
     r = _post(client, PNG_BYTES, fname="x.png", content_type="image/png")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["detected_mime_type"] == "image/png"
+    assert body["conclusion"] in ("not_found", "compliant", "noncompliant",
+                                  "indeterminate")
+    assert body["bmff"]["applicable"] is False
+
+
+def test_inspect_unsupported_format_still_415(client):
+    r = _post(client, b"GIF89a" + b"\x00" * 32, fname="x.gif",
+              content_type="image/gif")
     assert r.status_code == 415
     assert r.json()["error"]["code"] == "UNSUPPORTED_MEDIA_TYPE"
 

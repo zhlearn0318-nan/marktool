@@ -34,7 +34,9 @@ export interface DetectResponse {
   report: Report;
 }
 
-/** 视频打标任务请求（对应 labeling-backend POST /api/v1/metadata-label-jobs 的 request 字段） */
+/** 打标任务请求（对应 labeling-backend POST /api/v1/metadata-label-jobs 的 request 字段）
+ *  modality 必须与文件真实类型一致（JPEG/PNG → image，MP4 → video），
+ *  后端按文件头复核，不符返回 422 MODALITY_MISMATCH。 */
 export interface LabelJobRequest {
   standard: string;
   modality: "image" | "video";
@@ -84,7 +86,7 @@ export interface HealthResponse {
   capabilities: Record<string, boolean>;
 }
 
-/* ===== MP4 合规检测（POST /api/v1/compliance-inspect 只读） ===== */
+/* ===== 合规检测（POST /api/v1/compliance-inspect 只读，JPEG/PNG/MP4 同构报告） ===== */
 
 export type ComplianceConclusion =
   | "compliant"          // 检出唯一一份标识且通过国标结构
@@ -104,6 +106,9 @@ export interface ComplianceIssue {
 export interface ComplianceCandidate {
   tag: string;
   parseable: boolean;
+  /** 物理位置，如「JPEG APP1 段（标准 XMP）」「PNG 文本块… 第 2 份（共 2 份）」。
+   *  多份记录时靠它定位是哪一份出的问题。 */
+  location?: string | null;
   raw_preview?: string;
   parsed_fields?: string[];
 }
@@ -123,21 +128,34 @@ export interface ComplianceReport {
   c2pa_presence: "absent" | "present_unverified" | "indeterminate";
   media_status: "ok" | "degraded" | "unreadable" | null;
   confidence: "high" | "low";
+  /** MP4 走 ffprobe（streams / duration / decode_smoke），
+   *  图片走 Pillow（mode / width / height / pixels_sha256）。共用 media_status。 */
   media: {
     media_status?: string | null;
     format_name?: string | null;
-    duration?: string | null;
-    has_video?: boolean;
     probe_error?: string | null;
+    note?: string | null;
+    // MP4
+    duration?: string | null;
+    streams?: { codec_type: string; codec_name: string; width: number | null; height: number | null }[];
+    has_video?: boolean;
     decode_smoke?: string;
     decode_error?: string | null;
-    note?: string;
+    // 图片
+    mode?: string;
+    width?: number;
+    height?: number;
+    pixels_sha256?: string;
   };
+  /** MP4 专有。图片报告同样带这个块，但 `applicable: false` 且各字段为 null，
+   *  前端据此整块隐藏。注意 MP4 报告里**没有** applicable 键（视为适用）。 */
   bmff: {
-    has_ftyp: boolean;
-    has_moov: boolean;
-    has_mdat: boolean;
-    truncated: boolean;
+    applicable?: boolean;
+    note?: string | null;
+    has_ftyp: boolean | null;
+    has_moov: boolean | null;
+    has_mdat: boolean | null;
+    truncated: boolean | null;
     error: string | null;
     c2pa_uuid: string[];
   };

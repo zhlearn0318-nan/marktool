@@ -12,6 +12,7 @@ from typing import Any
 from . import jobs, util
 from .errors import INTERNAL_ERROR
 from ..adapters import AdapterError, get_adapter
+from .mimetype import suffix_for_mime
 from .storage import FileStorage, safe_display_name
 from .store import JobStore
 
@@ -43,6 +44,8 @@ def run_job(job_id: str, store: JobStore, storage: FileStorage,
 def _execute(job: dict, store: JobStore, storage: FileStorage, settings: Any) -> None:
     job_id = job["job_id"]
     mime = job["detected_mime_type"]
+    # 图片与视频共用本流水线，暂存/输出命名一律按真实 MIME 取后缀（§12.2）
+    suffix = suffix_for_mime(mime)
     original_path = storage.original_path(job["original_stored_name"])
     submitted = json.loads(job["submitted_aigc"])
     adapter = get_adapter(mime, exiftool=settings.paths.exiftool,
@@ -66,11 +69,12 @@ def _execute(job: dict, store: JobStore, storage: FileStorage, settings: Any) ->
 
     # ---- 写入（§9.3：replace 先整体移除再写入一份）----
     store.update(job_id, stage=jobs.STAGE_WRITING)
-    staging_result = storage.copy_to_staging(original_path, suffix=".mp4")
+    staging_result = storage.copy_to_staging(original_path, suffix=suffix)
     staging_noaigc = None
     try:
         if records and policy == jobs.POLICY_REPLACE:
-            staging_noaigc = storage.copy_to_staging(original_path, suffix="_noaigc.mp4")
+            staging_noaigc = storage.copy_to_staging(original_path,
+                                                     suffix=f"_noaigc{suffix}")
             adapter.remove_aigc(original_path, staging_noaigc)
             adapter.write_metadata(staging_noaigc, staging_result, submitted)
         else:
@@ -104,13 +108,13 @@ def _execute(job: dict, store: JobStore, storage: FileStorage, settings: Any) ->
 
     # ---- 原子发布（§9.2）----
     store.update(job_id, stage=jobs.STAGE_PUBLISHING)
-    output_stored = storage.new_stored_name(".mp4")
+    output_stored = storage.new_stored_name(suffix)
     final_path = storage.publish(staging_result, output_stored)
     output_size = final_path.stat().st_size
     output_sha256 = storage.sha256_of(final_path)
     original_display = safe_display_name(job["original_file_name"])
     stem = original_display.rsplit(".", 1)[0] if "." in original_display else original_display
-    output_display = f"{stem}_labeled.mp4"
+    output_display = f"{stem}_labeled{suffix}"
     created = job["created_at"]
     expires = util.add_hours_iso(created, settings.storage.output_retention_hours)
 

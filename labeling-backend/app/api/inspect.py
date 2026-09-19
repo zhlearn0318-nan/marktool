@@ -1,9 +1,10 @@
 """合规检测接口（合规方案 §8.3，样式对齐开发手册 §7 标注接口）。
 
-POST /api/v1/compliance-inspect —— 只读：上传 MP4 → 同步返回 GB45438-2025
-元数据隐式标识合规检测报告（conclusion / reason_code / repairability /
-media_status / c2pa_presence …）。
+POST /api/v1/compliance-inspect —— 只读：上传 JPEG / PNG / MP4 → 同步返回
+GB45438-2025 元数据隐式标识合规检测报告（conclusion / reason_code /
+repairability / media_status / c2pa_presence …）。
 
+按真实文件类型选择检测器（§4.5）：图片与视频产出**同构**报告，前端无需分叉。
 与标注任务（/api/v1/metadata-label-jobs）分开成独立资源，防止"检测"意外改动
 文件（§8.3）。检测用上传副本，报告返回后即删除副本，本接口无状态、不建任务；
 审计存储（MetadataAuditStore / 登记库核对）属后续阶段，registry 暂按 skipped。
@@ -19,8 +20,9 @@ from ..adapters import AdapterError
 from ..config import Settings
 from ..core.errors import (FILE_TOO_LARGE, INTERNAL_ERROR,
                            UNSUPPORTED_MEDIA_TYPE, ApiError)
+from ..core.image_inspector import ImageComplianceInspector
 from ..core.inspector import MetadataComplianceInspector
-from ..core.mimetype import detect_mime
+from ..core.mimetype import detect_mime, suffix_for_mime
 from ..core.reader import ReaderError
 from ..core.storage import FileStorage
 from .deps import get_settings, get_storage
@@ -29,9 +31,9 @@ router = APIRouter(prefix="/api/v1", tags=["compliance-inspect"])
 
 
 @router.post("/compliance-inspect", status_code=200)
-async def inspect_video(
+async def inspect_media(
         req_request: Request,
-        file: UploadFile = File(description="MP4 视频文件（只读检测，不改动原文件）"),
+        file: UploadFile = File(description="JPEG / PNG / MP4 文件（只读检测，不改动原文件）"),
         settings: Settings = Depends(get_settings),
         storage: FileStorage = Depends(get_storage),
 ):
@@ -42,13 +44,13 @@ async def inspect_video(
     mime = detect_mime(head)
     if mime is None:
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
-                       "无法识别的文件格式，合规检测仅支持 MP4。")
-    if mime != "video/mp4" or not settings.capabilities.get(mime, False):
+                       "无法识别的文件格式，合规检测支持 JPEG、PNG 与 MP4。")
+    if not settings.capabilities.get(mime, False):
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
-                       f"合规检测暂仅支持 video/mp4（收到 {mime}）。")
+                       f"合规检测不支持该格式（收到 {mime}）。")
 
     # ---- 保存上传副本，边写边算 SHA-256（§9.1 第 5/6 步）----
-    stored = storage.new_stored_name(".mp4")
+    stored = storage.new_stored_name(suffix_for_mime(mime))
     path = storage.original_path(stored)
     h = hashlib.sha256(head)
     size = len(head)
@@ -69,7 +71,10 @@ async def inspect_video(
         raise ApiError(413, FILE_TOO_LARGE,
                        f"文件超过大小上限（{settings.storage.max_file_bytes // (1024 * 1024)} MB）。")
 
-    inspector = MetadataComplianceInspector(
+    # §4.5：按真实文件类型选择检测器，两种模态产出同构报告
+    inspector_cls = (ImageComplianceInspector if mime.startswith("image/")
+                     else MetadataComplianceInspector)
+    inspector = inspector_cls(
         exiftool=settings.paths.exiftool, ffprobe=settings.paths.ffprobe,
         ffmpeg=settings.paths.ffmpeg, exiftool_config=settings.paths.exiftool_config)
 

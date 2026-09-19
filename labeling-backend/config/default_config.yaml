@@ -29,8 +29,8 @@ limits:
   duration_tolerance_seconds: 0.1
 
 # 能力开关（§7.5）：前端据此隐藏/禁用对应入口
-# 首期视频适配器已实现；图片适配器由队友负责，暂标记不可用
+# 图片（JPEG/PNG）与视频（MP4）适配器均已实现，共用同一套 /api/v1 接口
 capabilities:
-  image/jpeg: false
-  image/png: false
+  image/jpeg: true
+  image/png: true
   video/mp4: true

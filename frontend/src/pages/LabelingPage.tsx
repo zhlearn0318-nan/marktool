@@ -2,10 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Input, Progress, Select, Upload, message } from "antd";
 import { DownloadOutlined, InboxOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
-import { createLabelJob, downloadLabelJob, getHealth, getLabelJob } from "../api";
+import { createLabelJob, downloadLabelJob, getHealth, getLabelJob, modalityForFile } from "../api";
 import type { LabelJobResponse } from "../types";
 
 const TERMINAL = new Set(["succeeded", "failed"]);
+
+/** 与后端能力表一致的受支持格式（§4.5 图片/视频共用同一套接口） */
+const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png"];
+const ACCEPT = ".mp4,.jpg,.jpeg,.png,video/mp4,image/jpeg,image/png";
 
 const STAGE_ZH: Record<string, string> = {
   queued: "排队中",
@@ -41,7 +45,7 @@ export default function LabelingPage() {
 
   useEffect(() => {
     getHealth()
-      .then((h) => setServiceUp(Boolean(h.capabilities?.["video/mp4"])))
+      .then((h) => setServiceUp(SUPPORTED_MIMES.some((m) => h.capabilities?.[m])))
       .catch(() => setServiceUp(false));
     return () => {
       if (timerRef.current) window.clearTimeout(timerRef.current);
@@ -62,7 +66,7 @@ export default function LabelingPage() {
 
   async function submit() {
     if (!file) {
-      message.warning("请先选择待打标的 MP4 文件");
+      message.warning("请先选择待打标的文件（MP4 / JPEG / PNG）");
       return;
     }
     const produceId = crypto.randomUUID().toUpperCase();
@@ -71,7 +75,7 @@ export default function LabelingPage() {
     try {
       const j = await createLabelJob(file, {
         standard: "GB45438-2025",
-        modality: "video",
+        modality: modalityForFile(file),
         existing_metadata_policy: policy as "reject" | "replace",
         AIGC: {
           Label: label,
@@ -98,7 +102,9 @@ export default function LabelingPage() {
       const blob = await downloadLabelJob(job.job_id);
       const name =
         job.output?.file_name ??
-        (file ? file.name.replace(/\.[^.]+$/, "") + "-labeled.mp4" : "labeled.mp4");
+        (file
+          ? file.name.replace(/(\.[^.]+)$/, "-labeled$1")
+          : "labeled.bin");
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -118,8 +124,8 @@ export default function LabelingPage() {
     <>
       <PageBanner
         eyebrow="LABELING"
-        title="视频打标"
-        sub="上传 MP4，按 GB 45438-2025 写入 XMP-aigc:AIGC 隐式标识，全程不转码。"
+        title="媒体打标"
+        sub="上传 MP4 / JPEG / PNG，按 GB 45438-2025 写入 XMP-aigc:AIGC 隐式标识，全程不转码、不重压像素。"
       />
 
       <section className="section">
@@ -128,7 +134,7 @@ export default function LabelingPage() {
             type="warning"
             showIcon
             style={{ marginBottom: 18 }}
-            message="视频打标服务不可用"
+            message="打标服务不可用"
             description="无法连接 /api/v1（labeling-backend，端口 8002）。请先启动该服务后再试。"
           />
         )}
@@ -142,7 +148,7 @@ export default function LabelingPage() {
             </div>
             <div className="ui-card-body">
               <Upload.Dragger
-                accept="video/mp4,.mp4"
+                accept={ACCEPT}
                 maxCount={1}
                 beforeUpload={(f) => {
                   setFile(f);
@@ -153,8 +159,10 @@ export default function LabelingPage() {
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽 MP4 到此处</p>
-                <p className="ant-upload-hint">仅支持 MP4 · 单文件 · 写入 XMP-aigc 不转码</p>
+                <p className="ant-upload-text">点击或拖拽 MP4 / JPEG / PNG 到此处</p>
+                <p className="ant-upload-hint">
+                  单文件 · 视频不转码、图片不重压 · 写入 XMP-aigc 隐式标识
+                </p>
               </Upload.Dragger>
 
               {file ? (

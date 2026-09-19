@@ -21,8 +21,20 @@ export async function detectImage(
   return res.json();
 }
 
-/** MP4 合规检测（POST /api/v1/compliance-inspect，只读，同步返回报告） */
-export async function inspectVideo(file: File): Promise<ComplianceReport> {
+/** 按文件推导 modality（JPEG/PNG → image，其余 → video）。
+ *
+ *  只是给后端的声明，不代替后端校验：后端按文件头复核，不符返回 422。
+ *  认不出扩展名时按 .mp4 之外的都当 image 更危险，故回落到 video。 */
+export function modalityForFile(file: File): "image" | "video" {
+  const ext = file.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
+  if (["jpg", "jpeg", "png"].includes(ext)) return "image";
+  if (file.type.startsWith("image/")) return "image";
+  return "video";
+}
+
+/** 合规检测（POST /api/v1/compliance-inspect，只读，同步返回报告）。
+ *  支持 JPEG / PNG / MP4，三种格式返回同构报告。 */
+export async function inspectMedia(file: File): Promise<ComplianceReport> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch("/api/v1/compliance-inspect", { method: "POST", body: form });
@@ -44,7 +56,7 @@ export async function getHealth(): Promise<HealthResponse> {
   return res.json();
 }
 
-/** 创建视频打标任务（POST /api/v1/metadata-label-jobs） */
+/** 创建打标任务（POST /api/v1/metadata-label-jobs），JPEG / PNG / MP4 共用 */
 export async function createLabelJob(
   file: File,
   request: LabelJobRequest
