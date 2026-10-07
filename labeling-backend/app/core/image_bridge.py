@@ -15,19 +15,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .inspector_common import bmff_not_applicable
 from ..metadata.compliance import MetadataComplianceResult
 from ..metadata.exiftool_client import ExifToolClient
 from ..metadata.identifier_registry import SQLiteIdentifierRegistry
 
-# 图片没有 BMFF box 结构；前端据此整行隐藏容器结构（保留键名以维持形状一致）
-_BMFF_NOT_APPLICABLE = {
-    "applicable": False,
-    "note": "图片无 BMFF box 结构（BMFF 为 MP4 专有）",
-    "has_ftyp": None,
-    "has_moov": None,
-    "has_mdat": None,
-    "c2pa_uuid": [],
-}
+# 图片没有 BMFF box 结构；前端据此整行隐藏容器结构（保留键名以维持形状一致）。
+# 该占位结构由 app.core.inspector_common 统一提供，图片与文档共用同一份。
+_BMFF_NOT_APPLICABLE_NOTE = "图片无 BMFF box 结构（BMFF 为 MP4 专有）"
 
 # 严重度词表：他们的 level → 本项目既有的 severity
 _SEVERITY = {"error": "error", "warning": "warn", "info": "info"}
@@ -129,7 +124,7 @@ def _media_block(path: str, result: MetadataComplianceResult) -> dict:
     block: dict = {
         "media_status": "ok",
         "format": result.detected_format,
-        "pixels_sha256": result.pixel_sha256,
+        "pixels_sha256": result.content_fingerprint,
         "file_sha256": result.file_sha256,
     }
     try:
@@ -173,7 +168,7 @@ def to_report(path: str, result: MetadataComplianceResult, *,
         # 图片判定是确定性的（结构 + 交叉读取 + 登记库），不存在置信度分级
         "confidence": "high",
         "media": media,
-        "bmff": dict(_BMFF_NOT_APPLICABLE),
+        "bmff": bmff_not_applicable(_BMFF_NOT_APPLICABLE_NOTE),
         "registry": registry,
         "detector_version": DETECTOR_VERSION,
         "exiftool_version": exiftool_version,
@@ -226,5 +221,12 @@ def build_repair_service(settings):
         identifier_database_path=Path(resolve_registry_path(settings)),
         max_upload_bytes=int(getattr(settings.storage, "max_file_bytes",
                                      25 * 1024 * 1024)),
+        # 视频/文档的修复走适配器，必须与打标流水线用同一套外部工具与 ExifTool
+        # 配置：配置不同会读到不同的标签集，"能不能自动修"的判定就会分叉。
+        exiftool=settings.paths.exiftool,
+        ffprobe=settings.paths.ffprobe,
+        ffmpeg=settings.paths.ffmpeg,
+        exiftool_config=settings.paths.exiftool_config,
+        duration_tolerance_seconds=settings.limits.duration_tolerance_seconds,
     )
     return MetadataRepairService(config)

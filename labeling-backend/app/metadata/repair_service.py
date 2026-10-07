@@ -15,14 +15,26 @@ from typing import Any, Optional
 
 from PIL import Image, UnidentifiedImageError
 
+from app.adapters import AdapterError, get_adapter
+from app.core import aigc as aigc_core
+# 两个同名类：这个是视频检测器（产出统一报告 dict），下面 metadata.compliance 里
+# 那个是图片检测器（产出 MetadataComplianceResult）。别名区分，免得又踩一次。
+from app.core.inspector import MetadataComplianceInspector as VideoComplianceInspector
+from app.core.mimetype import SNIFF_BYTES, detect_mime, suffix_for_mime
 from app.metadata.compliance import (
     ComplianceConclusion,
     ComplianceInspectionError,
     MetadataComplianceInspector,
 )
+from app.metadata.cross_read import (MARKDOWN_CROSS_READ, cross_read_mp4,
+                                     cross_read_pdf)
+from app.metadata.document_inspector import (DOCUMENT_MIMES,
+                                             DocumentComplianceInspector)
 from app.metadata.exiftool_client import ExifToolClient, ExifToolNotFoundError
-from app.metadata.identifier_registry import SQLiteIdentifierRegistry
+from app.metadata.identifier_registry import (SQLiteIdentifierRegistry,
+                                              build_identifier_lookup)
 from app.metadata.image_adapter import ImageMetadataError, ImageMetadataService
+from app.metadata.repair_inspection import from_report
 from app.metadata.timeutil import iso_utc, utc_now
 from app.metadata.repair_planner import (
     RepairPlanDraft,
@@ -69,6 +81,13 @@ class MetadataRepairConfig:
     file_retention_days: int = 180
     worker_count: int = 1
     exiftool_timeout_seconds: int = 30
+    # 视频/文档的修复走适配器注册表，需要与打标流水线同一套外部工具与配置，
+    # 否则同一份文件在"打标"与"修复"两条路上会读到不同的标识（§14）。
+    exiftool: str = "exiftool"
+    ffprobe: str = "ffprobe"
+    ffmpeg: str = "ffmpeg"
+    exiftool_config: Optional[str] = None
+    duration_tolerance_seconds: float = 0.1
 
     def __post_init__(self) -> None:
         if self.worker_count != 1:
@@ -105,6 +124,10 @@ class MetadataRepairConfig:
             exiftool_timeout_seconds=int(
                 os.getenv("AIGC_EXIFTOOL_TIMEOUT_SECONDS", "30")
             ),
+            exiftool=os.getenv("AIGC_EXIFTOOL_PATH", "exiftool"),
+            ffprobe=os.getenv("AIGC_FFPROBE_PATH", "ffprobe"),
+            ffmpeg=os.getenv("AIGC_FFMPEG_PATH", "ffmpeg"),
+            exiftool_config=os.getenv("AIGC_EXIFTOOL_CONFIG") or None,
         )
 
 
@@ -113,7 +136,25 @@ class _UploadInfo:
     format_name: str
     mime_type: str
     suffix: str
-    pixel_sha256: str
+    content_fingerprint: str
+    fingerprint_kind: str
+
+    @property
+    def is_image(self) -> bool:
+        return self.mime_type.startswith("image/")
+
+
+# 修复台支持的格式。图片走自成一体的写入服务，其余走适配器注册表——
+# 与打标流水线同一条分界线（``app/core/pipeline.py::_execute``），
+# 两条路用同一套判定，同一份文件才不会得到两个答案。
+_IMAGE_MIMES = frozenset({"image/jpeg", "image/png"})
+_ADAPTER_MIMES = frozenset({"video/mp4"}) | set(DOCUMENT_MIMES)
+
+# 各模态的人类可读格式名（报告的 detected_format / 界面文案）
+_FORMAT_NAMES = {
+    "image/jpeg": "JPEG", "image/png": "PNG", "video/mp4": "MP4",
+    "text/markdown": "Markdown", "application/pdf": "PDF",
+}
 
 
 class MetadataRepairService:
@@ -170,7 +211,18 @@ class MetadataRepairService:
                     )
         return self._image_service, self._inspector
 
-    def _inspect_upload(self, data: bytes) -> _UploadInfo:
+    def _detect_mime(self, data: bytes, filename: Optional[str]) -> str:
+        mime = detect_mime(data[:SNIFF_BYTES], filename)
+        if mime is None or mime not in _IMAGE_MIMES | _ADAPTER_MIMES:
+            raise MetadataRepairRequestError(
+                415,
+                "UNSUPPORTED_MEDIA_TYPE",
+                "修复台支持 JPEG / PNG / MP4 / Markdown(.md) / PDF",
+            )
+        return mime
+
+    def _inspect_image_upload(self, data: bytes) -> _UploadInfo:
+        """图片走 Pillow：既要判格式，也要在解码阶段挡住解压炸弹（§13）。"""
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -200,15 +252,82 @@ class MetadataRepairService:
             ) from exc
         except (UnidentifiedImageError, OSError, ValueError) as exc:
             raise MetadataRepairRequestError(
-                415, "UNSUPPORTED_MEDIA_TYPE", "只支持可正常解码的 JPEG/JPG 和 PNG"
+                415, "UNSUPPORTED_MEDIA_TYPE", "文件内容不是可正常解码的 JPEG/JPG 或 PNG"
             ) from exc
-        if format_name == "JPEG":
-            return _UploadInfo("JPEG", "image/jpeg", ".jpg", digest.hexdigest())
-        if format_name == "PNG":
-            return _UploadInfo("PNG", "image/png", ".png", digest.hexdigest())
-        raise MetadataRepairRequestError(
-            415, "UNSUPPORTED_MEDIA_TYPE", "只支持 JPEG/JPG 和 PNG"
-        )
+        if format_name not in {"JPEG", "PNG"}:
+            raise MetadataRepairRequestError(
+                415, "UNSUPPORTED_MEDIA_TYPE", "文件内容不是可正常解码的 JPEG/JPG 或 PNG"
+            )
+        mime = "image/jpeg" if format_name == "JPEG" else "image/png"
+        return _UploadInfo(format_name, mime, suffix_for_mime(mime),
+                           digest.hexdigest(), "pixel")
+
+    def _inspect_upload(self, data: bytes, filename: Optional[str],
+                        path: Path) -> _UploadInfo:
+        """探明格式与内容指纹。指纹按模态取，但都在**写入标识前**算（§6.1 b）。
+
+        视频/文档的指纹必须从文件算（ffprobe / 正文哈希 / 结构签名），所以这里
+        要一个已经落盘的路径；图片的像素哈希不依赖元数据，直接从内存解码即可。
+        """
+        mime = self._detect_mime(data, filename)
+        if mime in _IMAGE_MIMES:
+            return self._inspect_image_upload(data)
+        try:
+            fingerprint, kind = self._adapter_for(mime).content_fingerprint(path)
+        except AdapterError as exc:
+            raise MetadataRepairRequestError(
+                415, "UNSUPPORTED_MEDIA_TYPE", f"文件无法解析: {exc}"
+            ) from exc
+        return _UploadInfo(_FORMAT_NAMES.get(mime, mime), mime,
+                           suffix_for_mime(mime), fingerprint, kind)
+
+    def _adapter_for(self, mime: str):
+        return get_adapter(mime, exiftool=self.config.exiftool,
+                           ffprobe=self.config.ffprobe,
+                           ffmpeg=self.config.ffmpeg,
+                           exiftool_config=self.config.exiftool_config)
+
+    def _unified_inspector(self, mime: str):
+        """视频/文档的统一检测器——与 /compliance-inspect 用的是同一对。"""
+        if mime in DOCUMENT_MIMES:
+            return DocumentComplianceInspector(
+                mime, exiftool=self.config.exiftool,
+                exiftool_config=self.config.exiftool_config)
+        return VideoComplianceInspector(
+            exiftool=self.config.exiftool, ffprobe=self.config.ffprobe,
+            ffmpeg=self.config.ffmpeg,
+            exiftool_config=self.config.exiftool_config)
+
+    def _cross_read(self, path: Path, upload: _UploadInfo, records):
+        if upload.mime_type == "video/mp4":
+            return cross_read_mp4(path, records, ffprobe=self.config.ffprobe)
+        if upload.mime_type == "application/pdf":
+            return cross_read_pdf(path, records)
+        return MARKDOWN_CROSS_READ, []
+
+    def _planned_inspection(self, path: Path, upload: _UploadInfo,
+                            *, file_name: str, sha256: str):
+        """规划器要的检测结果。图片直达，其余经转换层装配（§8.3）。
+
+        装配而不是另写一套判定：规划器里那几处读法就是"能不能自动修"的判定
+        逻辑本身，三种模态必须共用同一份，否则同一个文件会在检测页与修复台
+        得到两个答案。
+        """
+        if upload.is_image:
+            _, inspector = self._get_tools()
+            return inspector.inspect(str(path))
+        adapter = self._adapter_for(upload.mime_type)
+        records = adapter.detect_existing(path)
+        report = self._unified_inspector(upload.mime_type).inspect(
+            str(path), file_name=file_name, size_bytes=path.stat().st_size,
+            sha256=sha256,
+            registry=build_identifier_lookup(
+                str(self.config.identifier_database_path)))
+        cross, issues = self._cross_read(path, upload, records)
+        return from_report(
+            report, records, content_fingerprint=upload.content_fingerprint,
+            fingerprint_kind=upload.fingerprint_kind, cross_reader=cross,
+            registry=self._registry, extra_issues=issues)
 
     @staticmethod
     def _safe_name(filename: Optional[str]) -> str:
@@ -218,7 +337,7 @@ class MetadataRepairService:
 
     @classmethod
     def _output_name(cls, original_name: str, suffix: str) -> str:
-        stem = Path(cls._safe_name(original_name)).stem[:120] or "image"
+        stem = Path(cls._safe_name(original_name)).stem[:120] or "file"
         return f"{stem}_repaired{suffix}"
 
     @staticmethod
@@ -288,16 +407,20 @@ class MetadataRepairService:
                 "FILE_TOO_LARGE",
                 f"文件超过当前 {self.config.max_upload_bytes} 字节上限",
             )
-        upload = self._inspect_upload(data)
+        # 先探格式定后缀，把文件落盘，再算内容指纹——视频/文档的指纹必须从
+        # 文件算（ffprobe / 正文哈希 / 结构签名），拿不到路径就算不出来。
+        mime = self._detect_mime(data, filename)
         now_dt = utc_now()
         now = iso_utc(now_dt)
         plan_id = f"plan_{uuid.uuid4().hex}"
         request_id = f"req_{uuid.uuid4().hex}"
-        input_path = self.input_dir / f"{uuid.uuid4().hex}{upload.suffix}"
+        input_path = self.input_dir / f"{uuid.uuid4().hex}{suffix_for_mime(mime)}"
         input_path.write_bytes(data)
         try:
             try:
-                _, inspector = self._get_tools()
+                upload = self._inspect_upload(data, filename, input_path)
+                if upload.is_image:
+                    _, inspector = self._get_tools()
             except ExifToolNotFoundError as exc:
                 raise MetadataRepairRequestError(
                     503,
@@ -305,10 +428,13 @@ class MetadataRepairService:
                     "ExifTool 当前不可用，不能可靠生成修复计划",
                 ) from exc
             try:
-                inspection = inspector.inspect(str(input_path))
-            except ComplianceInspectionError as exc:
+                inspection = self._planned_inspection(
+                    input_path, upload,
+                    file_name=self._safe_name(filename),
+                    sha256=hashlib.sha256(data).hexdigest())
+            except (ComplianceInspectionError, AdapterError) as exc:
                 raise MetadataRepairRequestError(
-                    422, exc.code, str(exc)
+                    422, getattr(exc, "code", "UNSUPPORTED_MEDIA_TYPE"), str(exc)
                 ) from exc
             try:
                 draft = RepairPlanner().plan(inspection, trusted_input)
@@ -339,7 +465,8 @@ class MetadataRepairService:
                     "detected_mime_type": upload.mime_type,
                     "input_size_bytes": len(data),
                     "input_sha256": input_sha256,
-                    "pixel_sha256": upload.pixel_sha256,
+                    "content_fingerprint": upload.content_fingerprint,
+                    "fingerprint_kind": upload.fingerprint_kind,
                     "input_path": str(input_path),
                     "inspection_json": inspection_payload,
                     "draft_json": draft_payload,
@@ -384,7 +511,8 @@ class MetadataRepairService:
                 timestamp=now,
                 payload={
                     "input_sha256": input_sha256,
-                    "pixel_sha256": upload.pixel_sha256,
+                    "content_fingerprint": upload.content_fingerprint,
+                    "fingerprint_kind": upload.fingerprint_kind,
                     "plan_hash": plan_hash,
                     "conclusion": inspection.conclusion.value,
                     "repairability": draft.repairability.value,
@@ -411,7 +539,8 @@ class MetadataRepairService:
                 "detected_mime_type": record["detected_mime_type"],
                 "size_bytes": record["input_size_bytes"],
                 "sha256": record["input_sha256"],
-                "pixel_sha256": record["pixel_sha256"],
+                "content_fingerprint": record["content_fingerprint"],
+                "fingerprint_kind": record["fingerprint_kind"],
                 "available": record.get("input_purged_at") is None,
                 "expires_at": record.get("input_expires_at"),
             },
@@ -471,7 +600,9 @@ class MetadataRepairService:
             raise MetadataRepairRequestError(
                 409, "REPAIR_INPUT_CHANGED", "原文件已变化，必须重新生成修复计划"
             )
-        suffix = ".jpg" if plan["detected_mime_type"] == "image/jpeg" else ".png"
+        # 后缀按真实 MIME 取：修复台现在服务三种模态，写死 jpg/png 会把 MP4
+        # 的成品存成 .png（内容没错，但下载回来名字是错的）。
+        suffix = suffix_for_mime(plan["detected_mime_type"])
         output_path = self.output_dir / f"{uuid.uuid4().hex}{suffix}"
         job_id = f"repair_job_{uuid.uuid4().hex}"
         request_id = f"req_{uuid.uuid4().hex}"
@@ -504,6 +635,114 @@ class MetadataRepairService:
 
     def _schedule(self, job_id: str) -> None:
         self._executor.submit(self._run_job, job_id)
+
+    # ---- 两条写入路径：图片自成一体的服务，其余走适配器注册表 ----
+
+    def _write_image(self, input_path: Path, output_path: Path, document: dict,
+                     draft: RepairPlanDraft, plan: dict,
+                     *, update_stage) -> dict[str, Any]:
+        image_service, inspector = self._get_tools()
+        if output_path.is_file():
+            # 崩溃恢复：成品已在，不重写，直接接着做回读与复检
+            result = image_service.recover_published(
+                str(input_path), str(output_path), document,
+                expected_input_sha256=plan["input_sha256"])
+        else:
+            result = image_service.write(
+                str(input_path), str(output_path), document, policy="replace",
+                initial_write=(draft.write_context is WriteContext.INITIAL_GENERATION),
+                stage_callback=update_stage)
+        post = inspector.inspect(
+            str(output_path),
+            initial_write=(
+                True if draft.write_context is WriteContext.INITIAL_GENERATION else None))
+        return {
+            "mime_type": result.mime_type,
+            "output_sha256": result.output_sha256,
+            "post": post,
+            "validation": {
+                "read_back_succeeded": result.validation.read_back_succeeded,
+                "schema_valid": result.validation.schema_valid,
+                "single_aigc_record": result.validation.single_aigc_record,
+                "media_integrity_valid": result.validation.media_integrity_valid,
+                "content_fingerprint_unchanged":
+                    post.content_fingerprint == plan["content_fingerprint"],
+            },
+        }
+
+    def _write_with_adapter(self, input_path: Path, output_path: Path,
+                            document: dict, draft: RepairPlanDraft, plan: dict,
+                            mime: str, *, update_stage) -> dict[str, Any]:
+        """视频/文档的修复写入与复检。
+
+        写入顺序与打标流水线**逐字一致**（先整体移除旧标识，再写一份），否则
+        同一份文件走"打标"和走"修复"会留下不同形态的成品。复检也必须用检测器
+        而不是回读结果自证：回读只说"我写进去了什么"，检测说"这份文件合规吗"。
+        """
+        adapter = self._adapter_for(mime)
+        submitted = document["AIGC"]
+        update_stage("writing")
+        if not output_path.is_file():
+            staging = output_path.with_name(output_path.name + ".staging")
+            staging.unlink(missing_ok=True)
+            try:
+                if adapter.detect_existing(input_path):
+                    no_aigc = output_path.with_name(output_path.name + ".noaigc")
+                    try:
+                        adapter.remove_aigc(input_path, no_aigc)
+                        adapter.write_metadata(no_aigc, staging, submitted)
+                    finally:
+                        no_aigc.unlink(missing_ok=True)
+                else:
+                    adapter.write_metadata(input_path, staging, submitted)
+                os.replace(staging, output_path)
+            finally:
+                staging.unlink(missing_ok=True)
+
+        # ---- 回读校验（§9.4）----
+        update_stage("verifying_metadata")
+        records = adapter.detect_existing(output_path)
+        if len(records) != 1:
+            raise AdapterError(f"修复后应恰好一份标识，实际 {len(records)} 份")
+        read_back = records[0].aigc
+        if read_back is None:
+            raise AdapterError("修复后的标识无法解析为 JSON")
+        if aigc_core.validate_aigc(read_back):
+            raise AdapterError("修复后的标识未通过七字段 Schema 校验")
+        if read_back != submitted:
+            raise AdapterError("修复后的七字段与确认计划不一致")
+
+        # ---- 媒体完整性（§9.4）----
+        update_stage("verifying_media")
+        media = adapter.media_integrity_check(
+            input_path, output_path,
+            duration_tolerance=self.config.duration_tolerance_seconds)
+        if not media.passed:
+            raise AdapterError(f"媒体完整性校验失败: {media.reason}")
+
+        # ---- 复检：用检测器再判一次，而不是拿回读结果自证 ----
+        update_stage("postchecking")
+        fingerprint, kind = adapter.content_fingerprint(output_path)
+        upload = _UploadInfo(_FORMAT_NAMES.get(mime, mime), mime,
+                             suffix_for_mime(mime), fingerprint, kind)
+        output_sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
+        post = self._planned_inspection(
+            output_path, upload, file_name=output_path.name,
+            sha256=output_sha256)
+        return {
+            "mime_type": mime,
+            "output_sha256": output_sha256,
+            "post": post,
+            "validation": {
+                "read_back_succeeded": True,
+                "schema_valid": True,
+                "single_aigc_record": True,
+                "media_integrity_valid": media.passed,
+                "carrier_tag": records[0].tag_key,
+                "content_fingerprint_unchanged":
+                    fingerprint == plan["content_fingerprint"],
+            },
+        }
 
     def _run_job(self, job_id: str) -> None:
         timestamp = iso_utc(utc_now())
@@ -550,35 +789,21 @@ class MetadataRepairService:
             payload={"input_sha256": plan["input_sha256"]},
         )
         try:
-            image_service, inspector = self._get_tools()
-
             def update_stage(stage: str) -> None:
                 self.store.update_stage(job_id, stage, iso_utc(utc_now()))
 
-            if output_path.is_file():
-                result = image_service.recover_published(
-                    str(input_path),
-                    str(output_path),
-                    document,
-                    expected_input_sha256=plan["input_sha256"],
-                )
+            mime = plan["detected_mime_type"]
+            if mime in _IMAGE_MIMES:
+                result = self._write_image(
+                    input_path, output_path, document, draft, plan,
+                    update_stage=update_stage)
             else:
-                result = image_service.write(
-                    str(input_path),
-                    str(output_path),
-                    document,
-                    policy="replace",
-                    initial_write=(
-                        draft.write_context is WriteContext.INITIAL_GENERATION
-                    ),
-                    stage_callback=update_stage,
-                )
-            post = inspector.inspect(
-                str(output_path),
-                initial_write=(
-                    True if draft.write_context is WriteContext.INITIAL_GENERATION else None
-                ),
-            )
+                result = self._write_with_adapter(
+                    input_path, output_path, document, draft, plan, mime,
+                    update_stage=update_stage)
+            post, validation = result["post"], result["validation"]
+            validation["post_repair_conclusion"] = post.conclusion.value
+            validation["project_policy_accepted"] = post.project_policy.accepted
             if post.conclusion is not ComplianceConclusion.COMPLIANT:
                 raise ImageMetadataError(
                     "REPAIR_POSTCHECK_FAILED",
@@ -590,18 +815,9 @@ class MetadataRepairService:
                     "REPAIR_POSTCHECK_FAILED",
                     "修复结果七字段与确认计划不一致",
                 )
-            validation = {
-                "read_back_succeeded": result.validation.read_back_succeeded,
-                "schema_valid": result.validation.schema_valid,
-                "single_aigc_record": result.validation.single_aigc_record,
-                "media_integrity_valid": result.validation.media_integrity_valid,
-                "post_repair_conclusion": post.conclusion.value,
-                "project_policy_accepted": post.project_policy.accepted,
-                "pixel_sha256_unchanged": post.pixel_sha256 == plan["pixel_sha256"],
-            }
-            if not validation["pixel_sha256_unchanged"]:
+            if not validation["content_fingerprint_unchanged"]:
                 raise ImageMetadataError(
-                    "MEDIA_INTEGRITY_FAILED", "修复前后图片像素指纹不一致"
+                    "MEDIA_INTEGRITY_FAILED", "修复前后内容指纹不一致"
                 )
             completed_dt = utc_now()
             completed = iso_utc(completed_dt)
@@ -630,18 +846,18 @@ class MetadataRepairService:
                 event_id=f"event_{uuid.uuid4().hex}",
                 timestamp=completed,
                 files_expires_at=files_expires_at,
-                output_mime_type=result.mime_type,
+                output_mime_type=result["mime_type"],
                 output_size_bytes=output_path.stat().st_size,
-                output_sha256=result.output_sha256,
+                output_sha256=result["output_sha256"],
                 validation=validation,
                 event_payload={
-                    "output_sha256": result.output_sha256,
+                    "output_sha256": result["output_sha256"],
                     "files_expires_at": files_expires_at,
                     "validation": validation,
                     "audit_artifact": repaired_artifact,
                 },
             )
-        except (ImageMetadataError, ComplianceInspectionError) as exc:
+        except (ImageMetadataError, ComplianceInspectionError, AdapterError) as exc:
             logger.warning(
                 "metadata repair failed: job_id=%s code=%s",
                 job_id,

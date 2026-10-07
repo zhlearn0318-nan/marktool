@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from ..adapters import AdapterError, get_adapter
+from ..adapters.base import FileContentError
 from ..config import Settings
 from ..core import aigc, jobs, util
 from ..core.errors import (AIGC_CHARACTER_INVALID, AIGC_METADATA_EXISTS,
@@ -22,7 +23,7 @@ from ..core.errors import (AIGC_CHARACTER_INVALID, AIGC_METADATA_EXISTS,
                            INVALID_MULTIPART, JOB_NOT_FOUND,
                            MODALITY_MISMATCH, UNSUPPORTED_MEDIA_TYPE, ApiError)
 from ..core.image_bridge import read_existing_records
-from ..core.mimetype import detect_mime
+from ..core.mimetype import SNIFF_BYTES, detect_mime
 from ..core.storage import FileStorage
 from ..core.store import JobStore
 from ..core.worker import JobWorker
@@ -31,11 +32,23 @@ from .deps import get_settings, get_storage, get_store, get_worker
 
 router = APIRouter(prefix="/api/v1", tags=["metadata-label-jobs"])
 
+# 真实文件类型 → 模态。文档类（Markdown / PDF，以及队友负责的 HTML / DOCX）
+# 统一归 text：它们是同一类东西，前端不该为四个格式各写一套逻辑（§7.2）。
+_MODALITY_BY_MIME = {
+    "video/mp4": jobs.MODALITY_VIDEO,
+    "text/markdown": jobs.MODALITY_TEXT,
+    "application/pdf": jobs.MODALITY_TEXT,
+}
+
+
+def _real_modality(mime: str) -> str:
+    return _MODALITY_BY_MIME.get(mime, jobs.MODALITY_IMAGE)
+
 
 @router.post("/metadata-label-jobs", status_code=202)
 async def create_job(
         req_request: Request,
-        file: Annotated[UploadFile, File(description="JPEG、PNG 或 MP4")],
+        file: Annotated[UploadFile, File(description="JPEG、PNG、MP4、Markdown(.md) 或 PDF")],
         request_json: Annotated[str, Form(alias="request", description="application/json 标注参数")],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
         settings: Settings = Depends(get_settings),
@@ -63,9 +76,10 @@ async def create_job(
         raise ApiError(422, AIGC_SCHEMA_INVALID, "standard 必须为 GB45438-2025。",
                        [{"field": "standard", "reason": "固定为 GB45438-2025"}])
     modality = req.get("modality")
-    if modality not in (jobs.MODALITY_IMAGE, jobs.MODALITY_VIDEO):
-        raise ApiError(422, AIGC_SCHEMA_INVALID, "modality 必须为 image 或 video。",
-                       [{"field": "modality", "reason": "仅支持 image/video"}])
+    if modality not in (jobs.MODALITY_IMAGE, jobs.MODALITY_VIDEO, jobs.MODALITY_TEXT):
+        raise ApiError(422, AIGC_SCHEMA_INVALID,
+                       "modality 必须为 image、video 或 text。",
+                       [{"field": "modality", "reason": "仅支持 image/video/text"}])
     policy = req.get("existing_metadata_policy", jobs.POLICY_REJECT)
     if policy not in jobs.POLICIES:
         raise ApiError(422, AIGC_SCHEMA_INVALID,
@@ -87,7 +101,7 @@ async def create_job(
                        [{"field": "AIGC.ProduceID", "reason": "该编号已在本系统使用过"}])
 
     # ---- 保存原文件，边写边算 SHA-256（§9.1 第 5/6 步）----
-    head = await file.read(16)
+    head = await file.read(SNIFF_BYTES)
     h = hashlib.sha256(head)
     size = len(head)
     stored = storage.new_stored_name("")
@@ -110,17 +124,20 @@ async def create_job(
                        f"文件超过大小上限（{settings.storage.max_file_bytes // (1024*1024)} MB）。")
 
     # ---- 按文件内容识别真实格式（§9.1 第 3 步）----
-    mime = detect_mime(head)
+    # 文本类（Markdown）无魔数，需借扩展名做必要前提 —— 但内容健全性仍要过，
+    # 改扩展名骗不过：把 PNG 命名成 .md，按内容判出来仍是 image/png（§13）。
+    mime = detect_mime(head, file.filename)
     if mime is None:
         storage.discard(path)
-        raise ApiError(415, UNSUPPORTED_MEDIA_TYPE, "无法识别的文件格式，仅支持 JPEG、PNG、MP4。")
+        raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
+                       "无法识别的文件格式，仅支持 JPEG、PNG、MP4、Markdown(.md) 与 PDF。")
     if not settings.capabilities.get(mime, False):
         storage.discard(path)
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        f"格式 {mime} 的适配器尚未实现。")
 
     # ---- 声明模态 vs 真实类型（§9.1 第 4 步）----
-    real_modality = jobs.MODALITY_VIDEO if mime == "video/mp4" else jobs.MODALITY_IMAGE
+    real_modality = _real_modality(mime)
     if modality != real_modality:
         storage.discard(path)
         raise ApiError(422, MODALITY_MISMATCH,
@@ -144,8 +161,21 @@ async def create_job(
                               ffprobe=settings.paths.ffprobe,
                               ffmpeg=settings.paths.ffmpeg,
                               exiftool_config=settings.paths.exiftool_config)
+        # 写入前预检（PDF：加密 / 已签名 / 截断）。放在请求期是为了不在 415 之外
+        # 还建一个注定失败的任务——签名文档写进去就等于把签名毁掉。
+        try:
+            preflight = getattr(adapter, "preflight", None)
+            if preflight is not None:
+                preflight(path)
+        except FileContentError as e:
+            storage.discard(path)
+            raise ApiError(415, UNSUPPORTED_MEDIA_TYPE, str(e)) from None
         try:
             found = adapter.detect_existing(path)
+        except FileContentError as e:
+            storage.discard(path)
+            raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
+                           f"文件结构损坏或不完整，无法读取元数据：{e}") from None
         except AdapterError as e:
             storage.discard(path)
             raise ApiError(500, INTERNAL_ERROR, f"元数据读取失败: {e}")

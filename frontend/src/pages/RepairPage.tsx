@@ -37,8 +37,9 @@ import type {
 } from "../types";
 import type { View } from "../nav";
 
-/** 修复工作台只处理位图：写入/回读/像素指纹校验都建立在 JPEG/PNG 载体上 */
-const ACCEPT = ".jpg,.jpeg,.png,image/jpeg,image/png";
+/** 与后端修复台的格式闸门一致：图片走像素指纹，视频走流签名，文本走正文/结构指纹。
+ *  三种模态共用同一套"计划 → 确认 → 执行 → 复检"流程，判定逻辑不分叉。 */
+const ACCEPT = ".jpg,.jpeg,.png,.mp4,.md,.pdf,image/jpeg,image/png,video/mp4,text/markdown,application/pdf";
 
 const STAGE_ZH: Record<string, string> = {
   queued: "排队中",
@@ -269,7 +270,7 @@ export default function RepairPage({ onNavigate }: { onNavigate?: (v: View) => v
 
   async function makePlan() {
     if (!file) {
-      message.warning("请先选择待修复的 JPEG / PNG");
+      message.warning("请先选择待修复的文件");
       return;
     }
     if (useTrusted && !sourceRef.trim()) {
@@ -348,9 +349,9 @@ export default function RepairPage({ onNavigate }: { onNavigate?: (v: View) => v
   return (
     <>
       <PageBanner
-        eyebrow="REPAIR · JPEG / PNG"
+        eyebrow="REPAIR · 图片 / 视频 / 文本"
         title="元数据修复工作台"
-        sub="按 GB 45438—2025 修复图片 AIGC 隐式标识：先查看计划，再显式确认执行。修复只改元数据、不动像素，原件保留且全程留审计。"
+        sub="按 GB 45438—2025 修复 AIGC 隐式标识：先查看计划，再显式确认执行。修复只改元数据、不动内容，原件保留且全程留审计。"
       />
 
       <section className="section">
@@ -369,7 +370,7 @@ export default function RepairPage({ onNavigate }: { onNavigate?: (v: View) => v
           <div className="ui-card">
             <div className="ui-card-head">
               <span className="ico">↑</span>
-              <h3>1 · 上传待修复图片</h3>
+              <h3>1 · 上传待修复文件</h3>
             </div>
             <div className="ui-card-body">
               <Upload.Dragger
@@ -385,8 +386,8 @@ export default function RepairPage({ onNavigate }: { onNavigate?: (v: View) => v
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽 JPEG / PNG 到此处</p>
-                <p className="ant-upload-hint">单文件 · 只改元数据不改像素 · 原件保留</p>
+                <p className="ant-upload-text">点击或拖拽 JPEG / PNG / MP4 / Markdown / PDF 到此处</p>
+                <p className="ant-upload-hint">单文件 · 只改元数据不改内容 · 原件保留</p>
               </Upload.Dragger>
 
               {file ? (
@@ -686,7 +687,7 @@ export default function RepairPage({ onNavigate }: { onNavigate?: (v: View) => v
                           <div style={{ fontSize: 13, lineHeight: 1.9 }}>
                             复检结论: {job.validation?.post_repair_conclusion ?? "-"}
                             <br />
-                            像素未改动: {job.validation?.pixel_sha256_unchanged ? "是" : "否"}
+                            内容未改动: {job.validation?.content_fingerprint_unchanged ? "是" : "否"}
                             <br />
                             操作人: {job.confirmation.operator_label ?? "-"}（
                             {job.confirmation.method ?? "-"}）

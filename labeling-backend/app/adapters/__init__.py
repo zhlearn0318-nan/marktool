@@ -6,12 +6,16 @@
 from __future__ import annotations
 
 from .base import AdapterError, BaseAdapter, MediaReport
+from .markdown import MarkdownAdapter
+from .pdf import PdfAdapter
 from .video import Mp4Adapter
 
 # 图片不在此注册：其读写由 app.metadata.image_adapter 承担（与合规检测同源，§14），
 # 走 app/core/pipeline.py::_execute_image 分支。留在这里会形成第二套图片实现。
 _ADAPTERS = {
     "video/mp4": Mp4Adapter,
+    "text/markdown": MarkdownAdapter,
+    "application/pdf": PdfAdapter,
 }
 
 
@@ -26,4 +30,4 @@ def get_adapter(mime: str, exiftool: str = "exiftool",
 
 
 __all__ = ["AdapterError", "BaseAdapter", "MediaReport", "get_adapter",
-           "Mp4Adapter"]
+           "MarkdownAdapter", "Mp4Adapter", "PdfAdapter"]

@@ -48,7 +48,8 @@ class SQLiteMetadataRepairStore:
                     detected_mime_type TEXT NOT NULL,
                     input_size_bytes INTEGER NOT NULL,
                     input_sha256 TEXT NOT NULL,
-                    pixel_sha256 TEXT NOT NULL,
+                    content_fingerprint TEXT NOT NULL,
+                    fingerprint_kind TEXT NOT NULL,
                     input_path TEXT NOT NULL,
                     inspection_json TEXT NOT NULL,
                     draft_json TEXT NOT NULL,
@@ -114,20 +115,44 @@ class SQLiteMetadataRepairStore:
                 );
                 """
             )
-            columns = {
+            self._migrate_plans(connection)
+
+    @staticmethod
+    def _migrate_plans(connection: sqlite3.Connection) -> None:
+        """列探测式迁移：新库由上面的 CREATE 直接建成新形态，旧库在此补齐。"""
+
+        def columns() -> set[str]:
+            return {
                 row[1]
                 for row in connection.execute(
                     "PRAGMA table_info(metadata_repair_plans)"
                 ).fetchall()
             }
-            if "input_expires_at" not in columns:
-                connection.execute(
-                    "ALTER TABLE metadata_repair_plans ADD COLUMN input_expires_at TEXT"
-                )
-            if "input_purged_at" not in columns:
-                connection.execute(
-                    "ALTER TABLE metadata_repair_plans ADD COLUMN input_purged_at TEXT"
-                )
+
+        if "content_fingerprint" not in columns() and "pixel_sha256" in columns():
+            # 旧库把「内容指纹」写成 pixel_sha256 —— 那是图片专属的命名。修复台要
+            # 接视频与文本，视频没有像素、文本更没有，列名必须回到模态中立。
+            # 用 RENAME COLUMN 而不是重建表：三种模态都有指纹，NOT NULL 同样成立；
+            # 旧值本就全是像素哈希，无需搬运。
+            connection.execute(
+                "ALTER TABLE metadata_repair_plans "
+                "RENAME COLUMN pixel_sha256 TO content_fingerprint"
+            )
+        if "fingerprint_kind" not in columns():
+            # 旧行全部来自图片通路，默认值即真值。这里给 DEFAULT 只为回填；
+            # 新表（上面的 CREATE）刻意不给默认值，免得漏写 kind 时被静默当成图片。
+            connection.execute(
+                "ALTER TABLE metadata_repair_plans ADD COLUMN fingerprint_kind "
+                "TEXT NOT NULL DEFAULT 'pixel'"
+            )
+        if "input_expires_at" not in columns():
+            connection.execute(
+                "ALTER TABLE metadata_repair_plans ADD COLUMN input_expires_at TEXT"
+            )
+        if "input_purged_at" not in columns():
+            connection.execute(
+                "ALTER TABLE metadata_repair_plans ADD COLUMN input_purged_at TEXT"
+            )
 
     @staticmethod
     def _encode_json(value: Any) -> str:
@@ -161,7 +186,8 @@ class SQLiteMetadataRepairStore:
         columns = (
             "plan_id", "request_id", "status", "created_at", "updated_at",
             "expires_at", "input_expires_at", "original_file_name", "detected_mime_type",
-            "input_size_bytes", "input_sha256", "pixel_sha256", "input_path",
+            "input_size_bytes", "input_sha256", "content_fingerprint",
+            "fingerprint_kind", "input_path",
             "inspection_json", "draft_json", "trusted_input_json", "plan_hash",
         )
         encoded = dict(values)

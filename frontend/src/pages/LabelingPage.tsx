@@ -7,9 +7,12 @@ import type { LabelJobResponse } from "../types";
 
 const TERMINAL = new Set(["succeeded", "failed"]);
 
-/** 与后端能力表一致的受支持格式（§4.5 图片/视频共用同一套接口） */
-const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png"];
-const ACCEPT = ".mp4,.jpg,.jpeg,.png,video/mp4,image/jpeg,image/png";
+/** 与后端能力表一致的受支持格式（§4.5 各模态共用同一套接口）
+ *  文档类（Markdown / PDF）用模态 text；HTML / DOCX 由队友接入后同此一份。 */
+const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png",
+                         "text/markdown", "application/pdf"];
+const ACCEPT = ".mp4,.jpg,.jpeg,.png,.md,.markdown,.pdf,"
+  + "video/mp4,image/jpeg,image/png,text/markdown,application/pdf";
 
 const STAGE_ZH: Record<string, string> = {
   queued: "排队中",
@@ -66,7 +69,7 @@ export default function LabelingPage() {
 
   async function submit() {
     if (!file) {
-      message.warning("请先选择待打标的文件（MP4 / JPEG / PNG）");
+      message.warning("请先选择待打标的文件（MP4 / JPEG / PNG / Markdown / PDF）");
       return;
     }
     const produceId = crypto.randomUUID().toUpperCase();
@@ -125,7 +128,7 @@ export default function LabelingPage() {
       <PageBanner
         eyebrow="LABELING"
         title="媒体打标"
-        sub="上传 MP4 / JPEG / PNG，按 GB 45438-2025 写入 XMP-aigc:AIGC 隐式标识，全程不转码、不重压像素。"
+        sub="上传 MP4 / JPEG / PNG / Markdown / PDF，按 GB 45438-2025 写入隐式标识，全程不转码、不重压像素、不改动正文。"
       />
 
       <section className="section">
@@ -159,9 +162,9 @@ export default function LabelingPage() {
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽 MP4 / JPEG / PNG 到此处</p>
+                <p className="ant-upload-text">点击或拖拽文件到此处（MP4 / JPEG / PNG / Markdown / PDF）</p>
                 <p className="ant-upload-hint">
-                  单文件 · 视频不转码、图片不重压 · 写入 XMP-aigc 隐式标识
+                  单文件 · 视频不转码、图片不重压、文档不改正文 · 写入隐式标识
                 </p>
               </Upload.Dragger>
 

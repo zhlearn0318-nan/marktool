@@ -32,6 +32,9 @@ POLICIES = frozenset({POLICY_REJECT, POLICY_REPLACE})
 # ---- 模态（§7.2）----
 MODALITY_IMAGE = "image"
 MODALITY_VIDEO = "video"
+# 文本模态：Markdown / PDF 与后续 HTML / DOCX 同为文本类，共用这一个值——
+# 四个格式若各报一个模态值，前端就得为"其实是同一类"的东西分四套逻辑。
+MODALITY_TEXT = "text"
 
 # 标准字段（§7.2 request）
 STANDARD = "GB45438-2025"

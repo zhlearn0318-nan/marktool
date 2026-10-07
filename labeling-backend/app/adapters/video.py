@@ -11,8 +11,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from ..core import bmff
 from ..core.jobs import MODALITY_VIDEO
-from .base import AdapterError, BaseAdapter, MediaReport
+from .base import AdapterError, BaseAdapter, MediaReport, fingerprint_of
 
 
 class Mp4Adapter(BaseAdapter):
@@ -56,6 +57,29 @@ class Mp4Adapter(BaseAdapter):
                              encoding="utf-8", errors="replace", timeout=300)
         if out.returncode != 0:
             raise AdapterError(f"视频无法解码（不可播放）: {out.stderr.strip()[:200]}")
+
+    def content_fingerprint(self, path: str | Path) -> tuple[str, str]:
+        """媒体字节指纹：顶层 ``mdat`` 载荷的 sha256（编号登记库用，§6.1 b）。
+
+        早先这里用的是 ffprobe 摘要（容器格式 + 时长 + 轨道/编解码/分辨率），
+        它只到"还是同一段媒体"这一粒度：**两份时长与轨道相同的不同片子算出来
+        一模一样**，登记库核对"是不是同一份内容"时形同虚设。
+
+        改用 mdat 载荷后能真正区分内容，理由见 ``bmff.media_payload_digest``：
+        写标识只动 moov/udta 与新增 uuid box，mdat 载荷原样复制，所以它跨写入
+        稳定；而 moov 里装着标识本身，不能进指纹。
+
+        **仍然比图片的像素哈希弱一档**：它证明"媒体字节没变"，但不做解码，
+        因此证明不了"每一帧都能正常解出来"。后者由 ``media_integrity_check``
+        的前后对比 + 解码冒烟承担，两者分工不同，缺一不可。
+
+        没有 mdat 可读时（结构损坏）退回 ffprobe 摘要：宁可给一个弱指纹，
+        也不要让打标流程因为算不出指纹而整个失败。
+        """
+        digest = bmff.media_payload_digest(path)
+        if digest is not None:
+            return digest, "stream"
+        return fingerprint_of(self._signature(self._ffprobe_json(path))), "stream"
 
     @staticmethod
     def _signature(probe: dict) -> dict:

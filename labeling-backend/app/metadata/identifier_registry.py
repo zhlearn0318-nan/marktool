@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Optional, Protocol
 
 
 class IdentifierRegistryConfigurationError(RuntimeError):
@@ -146,3 +146,36 @@ class SQLiteIdentifierRegistry:
                 (role, provider, content_id),
             ).fetchone()
         return row[0] if row is not None else None
+
+    def knows_produce_id(self, produce_id: str) -> bool:
+        """只读：这个 ProduceID 本机见过吗。
+
+        检测报告的 ``registry`` 块只问"见过/没见过"，不问"是不是这一份内容"——
+        后者要连提供者一起比指纹，那是修复台 ``verify_source`` 的活。两者别混：
+        这里答"见过"不构成任何真伪结论，未登记也不等同于不合规（§8.3）。
+        """
+        if not produce_id:
+            return False
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM aigc_identifiers
+                WHERE role = 'producer' AND content_id = ?
+                LIMIT 1
+                """,
+                (produce_id,),
+            ).fetchone()
+        return row is not None
+
+
+def build_identifier_lookup(
+        database_path: str | None) -> Optional[Callable[[str], bool]]:
+    """检测器要的"编号见过吗"回调；未配置登记库时返回 ``None``。
+
+    返回 ``None`` 而不是一个恒 False 的回调：检测器据此区分"本服务没接登记库"
+    （``mode: skipped``）与"接了但没见过编号"（``known: false``）——把两者都报成
+    没见过，会把"没接库"伪装成一个关于文件的结论。
+    """
+    if not database_path:
+        return None
+    return SQLiteIdentifierRegistry(database_path).knows_produce_id

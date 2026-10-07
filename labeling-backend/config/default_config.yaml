@@ -29,8 +29,12 @@ limits:
   duration_tolerance_seconds: 0.1
 
 # 能力开关（§7.5）：前端据此隐藏/禁用对应入口
-# 图片（JPEG/PNG）与视频（MP4）适配器均已实现，共用同一套 /api/v1 接口
+# 图片（JPEG/PNG）、视频（MP4）与文档（Markdown/PDF）适配器均已实现，
+# 共用同一套 /api/v1 接口。
+# 注意：本键存在时**整体替换** app/config.py 里的默认值——新增格式两处都要加。
 capabilities:
   image/jpeg: true
   image/png: true
   video/mp4: true
+  text/markdown: true
+  application/pdf: true
