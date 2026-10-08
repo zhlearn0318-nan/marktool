@@ -38,6 +38,8 @@ _MODALITY_BY_MIME = {
     "video/mp4": jobs.MODALITY_VIDEO,
     "text/markdown": jobs.MODALITY_TEXT,
     "application/pdf": jobs.MODALITY_TEXT,
+    "text/html": jobs.MODALITY_TEXT,
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": jobs.MODALITY_TEXT,
 }
 
 
@@ -48,7 +50,7 @@ def _real_modality(mime: str) -> str:
 @router.post("/metadata-label-jobs", status_code=202)
 async def create_job(
         req_request: Request,
-        file: Annotated[UploadFile, File(description="JPEG、PNG、MP4、Markdown(.md) 或 PDF")],
+        file: Annotated[UploadFile, File(description="JPEG、PNG、MP4、Markdown、PDF、HTML 或 DOCX")],
         request_json: Annotated[str, Form(alias="request", description="application/json 标注参数")],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
         settings: Settings = Depends(get_settings),
@@ -130,7 +132,7 @@ async def create_job(
     if mime is None:
         storage.discard(path)
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
-                       "无法识别的文件格式，仅支持 JPEG、PNG、MP4、Markdown(.md) 与 PDF。")
+                       "无法识别的文件格式，仅支持 JPEG、PNG、MP4、Markdown、PDF、HTML 与 DOCX。")
     if not settings.capabilities.get(mime, False):
         storage.discard(path)
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,

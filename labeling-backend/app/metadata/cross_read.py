@@ -40,6 +40,18 @@ MARKDOWN_CROSS_READ = CrossReaderResult(
     detail="Markdown 只有项目自带的一套 YAML 解析器，不存在独立的第二读取路径",
 )
 
+# HTML 和 DOCX 的规范载体均由项目自己的结构解析器读取。ExifTool 对 HTML
+# 自定义 meta 与 DOCX Custom XML Part 不能构成独立、等价的第二读取路径，
+# 因而诚实标为 not_applicable，不伪装成已完成交叉验证。
+HTML_CROSS_READ = CrossReaderResult(
+    status="not_applicable",
+    detail="HTML 自定义 meta 当前没有独立且等价的第二读取路径",
+)
+DOCX_CROSS_READ = CrossReaderResult(
+    status="not_applicable",
+    detail="DOCX Custom XML Part 当前没有独立且等价的第二读取路径",
+)
+
 
 def _diverged(detail: str) -> tuple[CrossReaderResult, list[ComplianceIssue]]:
     return (

@@ -166,7 +166,7 @@ def test_markdown_non_utf8_raises_inspect_error(tmp_path):
 
 def test_unsupported_mime_rejected():
     with pytest.raises(ValueError):
-        DocumentComplianceInspector("text/html")
+        DocumentComplianceInspector("text/plain")
 
 
 # ---- PDF ------------------------------------------------------------------

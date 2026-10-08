@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 from .base import AdapterError, BaseAdapter, MediaReport
+from .docx import DocxAdapter
+from .html import HtmlAdapter
 from .markdown import MarkdownAdapter
 from .pdf import PdfAdapter
 from .video import Mp4Adapter
@@ -16,6 +18,8 @@ _ADAPTERS = {
     "video/mp4": Mp4Adapter,
     "text/markdown": MarkdownAdapter,
     "application/pdf": PdfAdapter,
+    "text/html": HtmlAdapter,
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": DocxAdapter,
 }
 
 
@@ -30,4 +34,4 @@ def get_adapter(mime: str, exiftool: str = "exiftool",
 
 
 __all__ = ["AdapterError", "BaseAdapter", "MediaReport", "get_adapter",
-           "MarkdownAdapter", "Mp4Adapter", "PdfAdapter"]
+           "DocxAdapter", "HtmlAdapter", "MarkdownAdapter", "Mp4Adapter", "PdfAdapter"]

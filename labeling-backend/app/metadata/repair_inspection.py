@@ -53,7 +53,8 @@ _LEVEL = {"error": "error", "warn": "warning", "warning": "warning", "info": "in
 
 _CARRIER_CODES = frozenset({
     "LEGACY_CARRIER", "UNREADABLE_CARRIER", "DUPLICATE_RECORDS",
-    "PDF_ENCRYPTED", "PDF_SIGNED_PRESENT",
+    "PDF_ENCRYPTED", "PDF_SIGNED_PRESENT", "DOCX_SIGNED_PRESENT",
+    "HTML_C2PA_MANIFEST_PRESENT",
 })
 # 曾在这里的 ``MISSING_EOF`` 已删：没有任何检测器发这个码——缺 %%EOF 走的是
 # ``UNREADABLE_CARRIER``（见 document_inspector._verdict 的载体可靠性升级）。
@@ -63,7 +64,10 @@ _CARRIER_CODES = frozenset({
 # 同一件事在检测页和修复台必须一个说法，各写各的文案迟早会对不上。
 #
 # 工具内无解：写入方式本身就会毁掉文件（PDF 整体重写 vs 签名/加密）。
-_CARRIER_FORBIDDEN = frozenset({"PDF_SIGNED_PRESENT", "PDF_ENCRYPTED"})
+_CARRIER_FORBIDDEN = frozenset({
+    "PDF_SIGNED_PRESENT", "PDF_ENCRYPTED", "DOCX_SIGNED_PRESENT",
+    "HTML_C2PA_MANIFEST_PRESENT",
+})
 # 载体现状不可靠：连"里面原本有没有标识"都定不了，得人来判断来源。
 _CARRIER_UNRELIABLE = frozenset({"UNREADABLE_CARRIER", "METADATA_REGION_WIPED"})
 
@@ -311,5 +315,8 @@ def _detected_format(report: dict, mime: str) -> str:
     block = report.get("document")
     if isinstance(block, dict) and block.get("format"):
         return str(block["format"])
-    return {"video/mp4": "MP4", "application/pdf": "PDF",
-            "text/markdown": "Markdown"}.get(mime, mime or "unknown")
+    return {
+        "video/mp4": "MP4", "application/pdf": "PDF",
+        "text/markdown": "Markdown", "text/html": "HTML",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX",
+    }.get(mime, mime or "unknown")

@@ -59,7 +59,9 @@ def insert_before_iend(data: bytes, chunk: bytes) -> bytes:
 def make_markdown(path: Path, body: str = "# 标题\n\n正文。\n",
                   frontmatter: str | None = None) -> Path:
     text = body if frontmatter is None else f"---\n{frontmatter}\n---\n{body}"
-    path.write_text(text, encoding="utf-8")
+    # 测试夹具必须按字符串中写明的行尾逐字节落盘；Path.write_text 在 Windows
+    # 会把 LF 自动改成 CRLF，使同一测试在 Linux 与 Windows 得到不同文件。
+    path.write_bytes(text.encode("utf-8"))
     return path
 
 

@@ -1,4 +1,4 @@
-"""文档（Markdown / PDF）隐式标识 · 合规检测器。
+"""文档（Markdown / PDF / HTML / DOCX）隐式标识 · 合规检测器。
 
 只读检测：扫描文档的全部 AIGC 候选 → 按 GB 45438—2025 附录 E 判定 → 输出与
 MP4/图片**同构**的报告（conclusion / reason_code / issues / repairability /
@@ -21,6 +21,7 @@ from typing import Callable
 from ..core import pdfstruct
 from ..core.inspector_common import (
     C2PA_ABSENT,
+    C2PA_PRESENT,
     CONFIDENCE_HIGH,
     CONFIDENCE_LOW,
     CONCLUSION_INDETERMINATE,
@@ -38,14 +39,16 @@ from ..core.inspector_common import (
     exiftool_version,
     registry_block,
 )
-from ..core.reader import ReaderError, read_aigc_records
-from . import markdown_carrier
+from ..core.reader import AIGCRecord, ReaderError, read_aigc_records
+from . import docx_carrier, html_carrier, markdown_carrier
 
 DETECTOR_VERSION = "document-compliance-inspector/0.1.0"
 
 MARKDOWN_MIME = "text/markdown"
 PDF_MIME = "application/pdf"
-DOCUMENT_MIMES = (MARKDOWN_MIME, PDF_MIME)
+HTML_MIME = "text/html"
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+DOCUMENT_MIMES = (MARKDOWN_MIME, PDF_MIME, HTML_MIME, DOCX_MIME)
 
 # 各格式的旧载体（只读不写；命中给 LEGACY_CARRIER，不翻转结论）
 _LEGACY = {
@@ -55,6 +58,12 @@ _LEGACY = {
     PDF_MIME: LegacyRule(detects=lambda tag: tag.startswith("PDF"),
                          name="PDF Document Info 字典键",
                          single_note="旧载体，仅提示，不影响国标结论"),
+    HTML_MIME: LegacyRule(detects=lambda tag: tag.startswith("html-meta-invalid"),
+                          name="非规范 HTML meta",
+                          single_note="可读取但不在项目规范位置，禁止自动改写"),
+    DOCX_MIME: LegacyRule(detects=lambda tag: tag.startswith("ooxml-customXml-invalid"),
+                          name="非规范 OOXML Custom XML",
+                          single_note="可读取但不在项目规范载体中，禁止自动改写"),
 }
 
 
@@ -90,9 +99,115 @@ class DocumentComplianceInspector:
             return self._inspect_pdf(path, elapsed, file_name=file_name,
                                      size_bytes=size_bytes, sha256=sha256,
                                      request_id=request_id, registry=registry)
+        if self.mime == HTML_MIME:
+            return self._inspect_html(path, elapsed, file_name=file_name,
+                                      size_bytes=size_bytes, sha256=sha256,
+                                      request_id=request_id, registry=registry)
+        if self.mime == DOCX_MIME:
+            return self._inspect_docx(path, elapsed, file_name=file_name,
+                                      size_bytes=size_bytes, sha256=sha256,
+                                      request_id=request_id, registry=registry)
         return self._inspect_markdown(path, elapsed, file_name=file_name,
                                       size_bytes=size_bytes, sha256=sha256,
                                       request_id=request_id, registry=registry)
+
+    # ---- HTML ----
+    def _inspect_html(self, path: Path, elapsed, *, file_name, size_bytes,
+                      sha256, request_id, registry) -> dict:
+        carrier = html_carrier.HtmlMetadataAdapter()
+        try:
+            inspection = carrier.inspect(path)
+        except html_carrier.HtmlMetadataError as exc:
+            raise DocumentInspectError(str(exc)) from None
+        records: list[AIGCRecord] = []
+        invalid = False
+        for record in inspection.records:
+            canonical = record.inside_head and record.property_name.casefold() == "aigc"
+            invalid = invalid or not canonical
+            records.append(AIGCRecord(
+                tag_key="html-meta:AIGC" if canonical else "html-meta-invalid:AIGC",
+                raw=record.raw_value,
+                aigc=record.aigc,
+                location="HTML head/meta[name=AIGC]" if canonical
+                else "HTML 非规范 AIGC meta",
+            ))
+        media = {
+            "media_status": MEDIA_DEGRADED if invalid else MEDIA_OK,
+            "format": "HTML",
+            "encoding": inspection.encoding,
+            "eol": "CRLF" if inspection.newline == "\r\n" else "LF",
+        }
+        document = {
+            "format": "html",
+            "encoding": inspection.encoding,
+            "eol": media["eol"],
+            "body_sha256": inspection.protected_content_sha256,
+            "aigc_carrier_count": len(records),
+            "c2pa_manifest_present": inspection.has_c2pa_manifest,
+        }
+        issues: list[Issue] = []
+        if invalid:
+            issues.append(Issue(
+                "UNREADABLE_CARRIER", "warn",
+                "HTML 中存在非规范位置或名称的 AIGC meta；可读取但不可自动改写", None))
+        if inspection.has_c2pa_manifest:
+            media["media_status"] = MEDIA_DEGRADED
+            issues.append(Issue(
+                "HTML_C2PA_MANIFEST_PRESENT", "warn",
+                "HTML 存在 C2PA manifest 引用；修改前需具备重新签名能力", None))
+        return self._verdict(
+            path, records, media, document, elapsed, file_name=file_name,
+            size_bytes=size_bytes, sha256=sha256, request_id=request_id,
+            registry=registry, extra_issues=issues,
+            c2pa=C2PA_PRESENT if inspection.has_c2pa_manifest else C2PA_ABSENT)
+
+    # ---- DOCX ----
+    def _inspect_docx(self, path: Path, elapsed, *, file_name, size_bytes,
+                      sha256, request_id, registry) -> dict:
+        carrier = docx_carrier.DocxMetadataAdapter()
+        try:
+            inspection = carrier.inspect(path)
+        except docx_carrier.DocxMetadataError as exc:
+            raise DocumentInspectError(str(exc)) from None
+        records: list[AIGCRecord] = []
+        invalid = False
+        for record in inspection.records:
+            invalid = invalid or not record.canonical_carrier
+            records.append(AIGCRecord(
+                tag_key=("ooxml-customXml:AIGC" if record.canonical_carrier
+                         else "ooxml-customXml-invalid:AIGC"),
+                raw=record.raw_value,
+                aigc=record.aigc,
+                location=f"OOXML Custom XML Part ({record.part_name})",
+            ))
+        degraded = invalid or inspection.has_digital_signature
+        media = {
+            "media_status": MEDIA_DEGRADED if degraded else MEDIA_OK,
+            "format": "DOCX",
+            "signed": inspection.has_digital_signature,
+            "ooxml_conformance": inspection.ooxml_conformance,
+        }
+        document = {
+            "format": "docx",
+            "ooxml_conformance": inspection.ooxml_conformance,
+            "main_document_part": inspection.main_document_part,
+            "package_sha256": inspection.protected_content_sha256,
+            "aigc_carrier_count": len(records),
+            "signed": inspection.has_digital_signature,
+        }
+        issues: list[Issue] = []
+        if invalid:
+            issues.append(Issue(
+                "UNREADABLE_CARRIER", "warn",
+                "DOCX 中存在非规范 AIGC Custom XML 载体；可读取但不可自动改写", None))
+        if inspection.has_digital_signature:
+            issues.append(Issue(
+                "DOCX_SIGNED_PRESENT", "warn",
+                "DOCX 含 Office 数字签名；只读检测安全，但修改会使签名失效", None))
+        return self._verdict(
+            path, records, media, document, elapsed, file_name=file_name,
+            size_bytes=size_bytes, sha256=sha256, request_id=request_id,
+            registry=registry, extra_issues=issues)
 
     # ---- Markdown ----
     def _inspect_markdown(self, path: Path, elapsed, *, file_name, size_bytes,
@@ -208,7 +323,8 @@ class DocumentComplianceInspector:
     def _verdict(self, path: Path, records: list, media: dict, document: dict,
                  elapsed, *, file_name, size_bytes, sha256, request_id, registry,
                  extra_issues: list[Issue] | None = None,
-                 unreliable_carrier: bool = False) -> dict:
+                 unreliable_carrier: bool = False,
+                 c2pa: str = C2PA_ABSENT) -> dict:
         classified = classify_records(records, _LEGACY[self.mime])
         issues: list[Issue] = list(extra_issues or []) + list(classified["issues"])
         conclusion = classified["conclusion"]
@@ -234,7 +350,7 @@ class DocumentComplianceInspector:
             bmff=bmff_not_applicable(), media=media,
             candidates=[candidate_entry(r) for r in records], issues=issues,
             conclusion=conclusion, reason_code=reason_code,
-            repairability=repairability, c2pa=C2PA_ABSENT, confidence=confidence,
+            repairability=repairability, c2pa=c2pa, confidence=confidence,
             registry=registry_block(registry, produce_id), file_name=file_name,
             size_bytes=size_bytes, sha256=sha256, request_id=request_id,
             elapsed_ms=elapsed(), detected_mime=self.mime,

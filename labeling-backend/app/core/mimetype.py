@@ -16,6 +16,8 @@ SNIFF_BYTES = 4096
 _PDF_SIGNATURE_WINDOW = 1024
 
 _MARKDOWN_SUFFIXES = (".md", ".markdown")
+_HTML_SUFFIXES = (".html", ".htm")
+_DOCX_SUFFIXES = (".docx",)
 
 
 def looks_like_utf8_text(sample: bytes) -> bool:
@@ -59,14 +61,27 @@ def detect_mime(head: bytes, filename: str | None = None) -> str | None:
     # PDF：以 %PDF- 开头；容忍前导垃圾（增量更新/传输噪声）
     if head[:_PDF_SIGNATURE_WINDOW].find(b"%PDF-") >= 0:
         return "application/pdf"
+    # DOCX：ZIP 魔数 + .docx 扩展名只是入口条件；适配器随后会验证完整 OOXML 包。
+    # 不能把所有 ZIP 都当 DOCX，也不能只看扩展名。
+    if _suffix_of(filename) in _DOCX_SUFFIXES and head.startswith(b"PK\x03\x04"):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    # HTML 支持 UTF-8 与显式声明的 GB18030。这里只做轻量入口识别，编码、根元素、
+    # head 唯一性由 HTML 载体适配器严格校验。
+    if _suffix_of(filename) in _HTML_SUFFIXES and b"\x00" not in head:
+        lowered = head.lower()
+        if b"<html" in lowered or b"<!doctype html" in lowered:
+            return "text/html"
     # Markdown：无魔数 —— 扩展名必要前提 + UTF-8 文本健全性
     if _suffix_of(filename) in _MARKDOWN_SUFFIXES and looks_like_utf8_text(head):
         return "text/markdown"
     return None
 
 
-SUPPORTED_MIMES = ("image/jpeg", "image/png", "video/mp4",
-                   "text/markdown", "application/pdf")
+SUPPORTED_MIMES = (
+    "image/jpeg", "image/png", "video/mp4", "text/markdown",
+    "application/pdf", "text/html",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+)
 
 # §12.2 文件命名：结果文件名沿用原格式后缀，各模态共用同一条流水线
 SUFFIX_BY_MIME = {
@@ -75,6 +90,8 @@ SUFFIX_BY_MIME = {
     "video/mp4": ".mp4",
     "text/markdown": ".md",
     "application/pdf": ".pdf",
+    "text/html": ".html",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
 }
 
 

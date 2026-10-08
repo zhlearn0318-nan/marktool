@@ -26,7 +26,8 @@ from app.metadata.compliance import (
     ComplianceInspectionError,
     MetadataComplianceInspector,
 )
-from app.metadata.cross_read import (MARKDOWN_CROSS_READ, cross_read_mp4,
+from app.metadata.cross_read import (DOCX_CROSS_READ, HTML_CROSS_READ,
+                                     MARKDOWN_CROSS_READ, cross_read_mp4,
                                      cross_read_pdf)
 from app.metadata.document_inspector import (DOCUMENT_MIMES,
                                              DocumentComplianceInspector)
@@ -154,6 +155,8 @@ _ADAPTER_MIMES = frozenset({"video/mp4"}) | set(DOCUMENT_MIMES)
 _FORMAT_NAMES = {
     "image/jpeg": "JPEG", "image/png": "PNG", "video/mp4": "MP4",
     "text/markdown": "Markdown", "application/pdf": "PDF",
+    "text/html": "HTML",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX",
 }
 
 
@@ -303,6 +306,12 @@ class MetadataRepairService:
             return cross_read_mp4(path, records, ffprobe=self.config.ffprobe)
         if upload.mime_type == "application/pdf":
             return cross_read_pdf(path, records)
+        if upload.mime_type == "text/html":
+            return HTML_CROSS_READ, []
+        if upload.mime_type == (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ):
+            return DOCX_CROSS_READ, []
         return MARKDOWN_CROSS_READ, []
 
     def _planned_inspection(self, path: Path, upload: _UploadInfo,

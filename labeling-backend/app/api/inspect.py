@@ -41,7 +41,7 @@ router = APIRouter(prefix="/api/v1", tags=["compliance-inspect"])
 @router.post("/compliance-inspect", status_code=200)
 async def inspect_media(
         req_request: Request,
-        file: UploadFile = File(description="JPEG / PNG / MP4 / Markdown / PDF 文件"
+        file: UploadFile = File(description="JPEG / PNG / MP4 / Markdown / PDF / HTML / DOCX 文件"
                                             "（只读检测，不改动原文件）"),
         settings: Settings = Depends(get_settings),
         storage: FileStorage = Depends(get_storage),
@@ -54,7 +54,7 @@ async def inspect_media(
     if mime is None:
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        "无法识别的文件格式，合规检测支持 JPEG、PNG、MP4、"
-                       "Markdown(.md) 与 PDF。")
+                       "Markdown、PDF、HTML 与 DOCX。")
     if not settings.capabilities.get(mime, False):
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        f"合规检测不支持该格式（收到 {mime}）。")

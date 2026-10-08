@@ -23,7 +23,7 @@ class MetadataLabelRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     standard: Literal["GB45438-2025"]
-    modality: Literal["image", "video"]
+    modality: Literal["image", "video", "text"]
     existing_metadata_policy: Literal["reject", "replace"] = "reject"
     AIGC: AIGCFields
 
