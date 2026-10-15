@@ -29,9 +29,10 @@ limits:
   duration_tolerance_seconds: 0.1
 
 # 能力开关（§7.5）：前端据此隐藏/禁用对应入口
-# 图片（JPEG/PNG）、视频（MP4）与音频（M4A）共用同一套 /api/v1 标注接口
+# 图片（JPEG/PNG）、视频（MP4）与音频（M4A/MP3）共用同一套 /api/v1 标注接口
 capabilities:
   image/jpeg: true
   image/png: true
   video/mp4: true
   audio/mp4: true
+  audio/mpeg: true

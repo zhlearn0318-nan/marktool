@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from .base import AdapterError, BaseAdapter, MediaReport
-from .audio import M4aAdapter
+from .audio import M4aAdapter, Mp3Adapter
 from .video import Mp4Adapter
 
 # 图片不在此注册：其读写由 app.metadata.image_adapter 承担（与合规检测同源，§14），
@@ -14,6 +14,7 @@ from .video import Mp4Adapter
 _ADAPTERS = {
     "video/mp4": Mp4Adapter,
     "audio/mp4": M4aAdapter,
+    "audio/mpeg": Mp3Adapter,
 }
 
 
@@ -28,4 +29,4 @@ def get_adapter(mime: str, exiftool: str = "exiftool",
 
 
 __all__ = ["AdapterError", "BaseAdapter", "MediaReport", "get_adapter",
-           "Mp4Adapter", "M4aAdapter"]
+           "Mp4Adapter", "M4aAdapter", "Mp3Adapter"]

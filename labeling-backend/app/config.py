@@ -40,7 +40,7 @@ class Settings:
     # §4.5：图片与视频共用同一套接口，由后端按真实文件类型选择载体适配器
     capabilities: dict = field(default_factory=lambda: {
         "image/jpeg": True, "image/png": True, "video/mp4": True,
-        "audio/mp4": True})
+        "audio/mp4": True, "audio/mpeg": True})
 
 
 def load_settings(yaml_path: str | Path | None = None) -> Settings:

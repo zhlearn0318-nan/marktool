@@ -35,7 +35,7 @@ router = APIRouter(prefix="/api/v1", tags=["metadata-label-jobs"])
 @router.post("/metadata-label-jobs", status_code=202)
 async def create_job(
         req_request: Request,
-        file: Annotated[UploadFile, File(description="JPEG、PNG、MP4 或 M4A")],
+        file: Annotated[UploadFile, File(description="JPEG、PNG、MP4、M4A 或 MP3")],
         request_json: Annotated[str, Form(alias="request", description="application/json 标注参数")],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
         settings: Settings = Depends(get_settings),
@@ -88,7 +88,9 @@ async def create_job(
 
     # ---- 保存原文件，边写边算 SHA-256（§9.1 第 5/6 步）----
     # 读取完整 ftyp 品牌集合：M4A 可仅在 compatible brands 中声明 M4A。
-    head = await file.read(64)
+    # MP3 的 ID3v2 标签可大于 64 字节，读取足够头部以定位其后的 MPEG 帧；
+    # 写入存储时仍会原样写回这些字节，绝不截断上传内容。
+    head = await file.read(8192)
     h = hashlib.sha256(head)
     size = len(head)
     stored = storage.new_stored_name("")
@@ -114,7 +116,7 @@ async def create_job(
     mime = detect_mime(head)
     if mime is None:
         storage.discard(path)
-        raise ApiError(415, UNSUPPORTED_MEDIA_TYPE, "无法识别的文件格式，仅支持 JPEG、PNG、MP4、M4A。")
+        raise ApiError(415, UNSUPPORTED_MEDIA_TYPE, "无法识别的文件格式，仅支持 JPEG、PNG、MP4、M4A、MP3。")
     if not settings.capabilities.get(mime, False):
         storage.discard(path)
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,

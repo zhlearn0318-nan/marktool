@@ -3,7 +3,7 @@
 依据《GB 45438—2025 网络安全技术 人工智能生成合成内容标识方法》及团队
 《gb45438-metadata-labeling-development-guide.md 开发手册》实现的后端标注服务。
 
-> 文档状态：首期前后端联调基线。MP4 视频与 M4A 音频元数据适配器已实现；图片适配器由队友开发，见下文"分工"。
+> 文档状态：首期前后端联调基线。MP4 视频、M4A 与 MP3 音频元数据适配器已实现；图片适配器由队友开发，见下文"分工"。
 
 ## 快速开始
 
@@ -54,14 +54,14 @@ python3 -m venv .venv
 用户 → watermark_tool（统一入口）
         → unified_engine（= 本服务的 pipeline.py：按真实文件类型分发）
              → 载体适配器（video.py / audio.py / image.py）
-                 → ExifTool（XMP-aigc:AIGC 读写） + ffprobe（媒体完整性）
+                 → ExifTool（XMP-aigc:AIGC）/ Mutagen（MP3 ID3v2） + ffprobe（媒体完整性）
 ```
 
 - `app/core/` 共享层：`aigc.py`（七字段模型/校验/序列化）、`aigc_schema.json`（§5.7 共享 Schema）、
   `reader.py`（全标签 AIGC 扫描，与检测器 aigc_check.py 同源）、`store.py`（SQLite 任务+审计）、
   `storage.py`（临时写入 + 原子发布 + 随机命名）、`pipeline.py`（状态机流水线）、`worker.py`（进程内任务）。
 - `app/adapters/video.py` **视频负责人交付**：MP4 写入/回读/replace/媒体完整性。
-- `app/adapters/audio.py`：M4A 写入/回读/replace/音频完整性；使用同一套任务接口与七字段 Schema。
+- `app/adapters/audio.py`：M4A、MP3 写入/回读/replace/音频完整性；使用同一套任务接口与七字段 Schema。
 
 ## 视频模块关键决策
 
@@ -76,11 +76,14 @@ python3 -m venv .venv
 - **检测器校准**：`AIGC项目/exif实践/aigc_check.py` 已按 §14 校准为 7 字段全必填（含 ReservedCode1/2），
   并新增未知字段告警。
 
-## M4A 音频模块
+## 音频模块（M4A / MP3）
 
 - **载体**：同样使用 `XMP-aigc:AIGC`，值为紧凑七字段 JSON；在验证的 M4A 中位于文件本体顶层 Adobe-XMP `uuid` box，输出 `carrier = "m4a-aigc-v1"`。
 - **完整性**：ffprobe 对比容器、时长和音频流的 codec/sample rate/channels，并用 `ffmpeg -map 0:a:0` 解码前两秒。
-- **范围**：M4A 仅支持 `/metadata-label-jobs` 打标；本阶段不支持 M4A 合规检测、MP3、模型识别、水印或 C2PA。详见 `docs/m4a-carrier-validation.md`。
+- **范围**：M4A 仅支持 `/metadata-label-jobs` 打标；本阶段不支持 M4A 合规检测、模型识别、水印或 C2PA。详见 `docs/m4a-carrier-validation.md`。
+
+- **MP3 载体**：文件开头 ID3v2 的 `TXXX:AIGC`，值为紧凑七字段 JSON，输出 `carrier = "mp3-id3v2-aigc-v1"`。正式读写使用 Mutagen，仅处理描述名严格等于 `AIGC` 的 TXXX，保留标题、作者、专辑、封面和其他自定义文本帧。
+- **范围**：MP3 仅支持 `/metadata-label-jobs` 打标；`/compliance-inspect` 对 MP3 返回 415。当前未承诺 MP3 模型识别、水印检测或 C2PA。详见 `docs/mp3-carrier-validation.md`。
 
 ## 分工边界
 
@@ -89,7 +92,7 @@ python3 -m venv .venv
 - ⏳ 待队友：图片（JPEG/PNG）适配器 —— `app/adapters/image.py` 已留扩展点，
   媒体完整性校验（可解码、宽高不变，§6.3）待补充。当前 `/api/v1/health` 返回
   `image/jpeg: false, image/png: false`，前端据此禁用图片入口（§7.5）。
-- 首期**不在范围内**（§3.2）：C2PA 互转、AI 概率检测、数字签名、文本/MP3 音频模态、批量上传。
+- 首期**不在范围内**（§3.2）：C2PA 互转、AI 概率检测、数字签名、文本音频模态、批量上传。
 
 ## 参考
 

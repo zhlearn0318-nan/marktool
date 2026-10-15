@@ -39,6 +39,7 @@ MODALITY_BY_MIME = {
     "image/png": MODALITY_IMAGE,
     "video/mp4": MODALITY_VIDEO,
     "audio/mp4": MODALITY_AUDIO,
+    "audio/mpeg": MODALITY_AUDIO,
 }
 
 # 标准字段（§7.2 request）
