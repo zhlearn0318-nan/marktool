@@ -42,11 +42,14 @@ async def inspect_media(
     request_id = req_request.state.request_id
 
     # ---- 头部探测真实类型（§9.1 第 3 步，不信任扩展名）----
-    head = await file.read(16)
+    head = await file.read(64)
     mime = detect_mime(head)
     if mime is None:
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        "无法识别的文件格式，合规检测支持 JPEG、PNG 与 MP4。")
+    if mime == "audio/mp4":
+        raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
+                       "M4A 当前仅支持元数据打标，尚不支持合规检测。")
     if not settings.capabilities.get(mime, False):
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        f"合规检测不支持该格式（收到 {mime}）。")

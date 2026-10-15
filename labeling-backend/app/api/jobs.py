@@ -35,7 +35,7 @@ router = APIRouter(prefix="/api/v1", tags=["metadata-label-jobs"])
 @router.post("/metadata-label-jobs", status_code=202)
 async def create_job(
         req_request: Request,
-        file: Annotated[UploadFile, File(description="JPEG、PNG 或 MP4")],
+        file: Annotated[UploadFile, File(description="JPEG、PNG、MP4 或 M4A")],
         request_json: Annotated[str, Form(alias="request", description="application/json 标注参数")],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
         settings: Settings = Depends(get_settings),
@@ -63,9 +63,9 @@ async def create_job(
         raise ApiError(422, AIGC_SCHEMA_INVALID, "standard 必须为 GB45438-2025。",
                        [{"field": "standard", "reason": "固定为 GB45438-2025"}])
     modality = req.get("modality")
-    if modality not in (jobs.MODALITY_IMAGE, jobs.MODALITY_VIDEO):
-        raise ApiError(422, AIGC_SCHEMA_INVALID, "modality 必须为 image 或 video。",
-                       [{"field": "modality", "reason": "仅支持 image/video"}])
+    if modality not in (jobs.MODALITY_IMAGE, jobs.MODALITY_VIDEO, jobs.MODALITY_AUDIO):
+        raise ApiError(422, AIGC_SCHEMA_INVALID, "modality 必须为 image、video 或 audio。",
+                       [{"field": "modality", "reason": "仅支持 image/video/audio"}])
     policy = req.get("existing_metadata_policy", jobs.POLICY_REJECT)
     if policy not in jobs.POLICIES:
         raise ApiError(422, AIGC_SCHEMA_INVALID,
@@ -87,7 +87,8 @@ async def create_job(
                        [{"field": "AIGC.ProduceID", "reason": "该编号已在本系统使用过"}])
 
     # ---- 保存原文件，边写边算 SHA-256（§9.1 第 5/6 步）----
-    head = await file.read(16)
+    # 读取完整 ftyp 品牌集合：M4A 可仅在 compatible brands 中声明 M4A。
+    head = await file.read(64)
     h = hashlib.sha256(head)
     size = len(head)
     stored = storage.new_stored_name("")
@@ -113,14 +114,14 @@ async def create_job(
     mime = detect_mime(head)
     if mime is None:
         storage.discard(path)
-        raise ApiError(415, UNSUPPORTED_MEDIA_TYPE, "无法识别的文件格式，仅支持 JPEG、PNG、MP4。")
+        raise ApiError(415, UNSUPPORTED_MEDIA_TYPE, "无法识别的文件格式，仅支持 JPEG、PNG、MP4、M4A。")
     if not settings.capabilities.get(mime, False):
         storage.discard(path)
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        f"格式 {mime} 的适配器尚未实现。")
 
     # ---- 声明模态 vs 真实类型（§9.1 第 4 步）----
-    real_modality = jobs.MODALITY_VIDEO if mime == "video/mp4" else jobs.MODALITY_IMAGE
+    real_modality = jobs.MODALITY_BY_MIME[mime]
     if modality != real_modality:
         storage.discard(path)
         raise ApiError(422, MODALITY_MISMATCH,

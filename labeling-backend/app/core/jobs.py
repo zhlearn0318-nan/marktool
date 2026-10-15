@@ -32,6 +32,14 @@ POLICIES = frozenset({POLICY_REJECT, POLICY_REPLACE})
 # ---- 模态（§7.2）----
 MODALITY_IMAGE = "image"
 MODALITY_VIDEO = "video"
+MODALITY_AUDIO = "audio"
+
+MODALITY_BY_MIME = {
+    "image/jpeg": MODALITY_IMAGE,
+    "image/png": MODALITY_IMAGE,
+    "video/mp4": MODALITY_VIDEO,
+    "audio/mp4": MODALITY_AUDIO,
+}
 
 # 标准字段（§7.2 request）
 STANDARD = "GB45438-2025"

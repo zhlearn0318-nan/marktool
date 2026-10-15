@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 
@@ -47,6 +48,8 @@ def carrier_location(tag_key: str) -> str | None:
 
 def exiftool_tags(path: str, exiftool: str, config: str | None) -> dict:
     """ExifTool 全标签 JSON 读取：-a 保留重复、-G 带组、-s 短标签名。"""
+    if exiftool == "exiftool":
+        exiftool = os.environ.get("EXIFTOOL_PATH", exiftool)
     cmd = [exiftool, "-json", "-a", "-G", "-s", path]
     if config:
         cmd[1:1] = ["-config", config]

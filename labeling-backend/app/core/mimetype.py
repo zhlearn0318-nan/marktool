@@ -8,19 +8,36 @@ def detect_mime(head: bytes) -> str | None:
         return "image/jpeg"
     if len(head) >= 8 and head[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
-    # ISO BMFF：偏移 4 处为 'ftyp'
+    # ISO BMFF：偏移 4 处为 'ftyp'。M4A 的 major/compatible brand 是
+    # 文件内容的一部分；扩展名只能由调用方作为显示辅助，不能参与此判断。
     if len(head) >= 12 and head[4:8] == b"ftyp":
+        brands = _bmff_brands(head)
+        if b"M4A " in brands:
+            return "audio/mp4"
         return "video/mp4"
     return None
 
 
-SUPPORTED_MIMES = ("image/jpeg", "image/png", "video/mp4")
+def _bmff_brands(head: bytes) -> set[bytes]:
+    """返回已读取 ftyp box 中的 major 与 compatible brands。"""
+    brands = {head[8:12]}
+    if len(head) < 16:
+        return brands
+    size = int.from_bytes(head[:4], "big")
+    end = min(len(head), size) if size >= 16 else len(head)
+    for offset in range(16, end - 3, 4):
+        brands.add(head[offset:offset + 4])
+    return brands
+
+
+SUPPORTED_MIMES = ("image/jpeg", "image/png", "video/mp4", "audio/mp4")
 
 # §12.2 文件命名：结果文件名沿用原格式后缀，图片与视频共用同一条流水线
 SUFFIX_BY_MIME = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "video/mp4": ".mp4",
+    "audio/mp4": ".m4a",
 }
 
 

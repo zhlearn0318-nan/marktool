@@ -54,16 +54,16 @@ def run_job(job_id: str, store: JobStore, storage: FileStorage,
 
 
 def _execute(job: dict, store: JobStore, storage: FileStorage, settings: Any) -> None:
-    # §4.5：图片与视频共用同一套任务接口，但载体实现分属两条交付线。
+    # §4.5：图片与媒体文件共用同一套任务接口，但载体实现分属不同交付线。
     if job["detected_mime_type"] in _IMAGE_MIMES:
         return _execute_image(job, store, storage, settings)
-    return _execute_video(job, store, storage, settings)
+    return _execute_media(job, store, storage, settings)
 
 
-def _execute_video(job: dict, store: JobStore, storage: FileStorage, settings: Any) -> None:
+def _execute_media(job: dict, store: JobStore, storage: FileStorage, settings: Any) -> None:
     job_id = job["job_id"]
     mime = job["detected_mime_type"]
-    # 图片与视频共用本流水线，暂存/输出命名一律按真实 MIME 取后缀（§12.2）
+    # 媒体适配器共用本流水线，暂存/输出命名一律按真实 MIME 取后缀（§12.2）
     suffix = suffix_for_mime(mime)
     original_path = storage.original_path(job["original_stored_name"])
     submitted = json.loads(job["submitted_aigc"])

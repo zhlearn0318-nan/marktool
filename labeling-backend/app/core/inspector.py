@@ -18,6 +18,7 @@ metadata-repair-jobs / 审计存储 属后续阶段），repairability 仅作报
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -219,7 +220,7 @@ class MetadataComplianceInspector:
 
     def __init__(self, exiftool: str = "exiftool", ffprobe: str = "ffprobe",
                  ffmpeg: str = "ffmpeg", exiftool_config: str | None = None):
-        self._exiftool = exiftool
+        self._exiftool = os.environ.get("EXIFTOOL_PATH", exiftool) if exiftool == "exiftool" else exiftool
         self._exiftool_config = exiftool_config
         self._adapter = Mp4Adapter(exiftool=exiftool, ffprobe=ffprobe, ffmpeg=ffmpeg,
                                    exiftool_config=exiftool_config)
