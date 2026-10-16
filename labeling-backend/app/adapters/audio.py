@@ -16,7 +16,8 @@ from .base import AdapterError, BaseAdapter, MediaReport
 class _AudioAdapter(BaseAdapter):
     def content_fingerprint(self, path: str | Path) -> tuple[str, str]:
         """Hash compressed audio packets without ID3/XMP or container metadata."""
-        cmd = [self.ffmpeg, "-v", "error", "-i", str(path), "-map", "0:a",
+        input_options = ["-f", self.input_format] if self.input_format else []
+        cmd = [self.ffmpeg, "-v", "error", *input_options, "-i", str(path), "-map", "0:a",
                "-c", "copy", "-f", "hash", "-hash", "sha256", "-"]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True,
@@ -96,6 +97,9 @@ class Mp3Adapter(_AudioAdapter):
     carrier_id = "mp3-id3v2-aigc-v1"
     modality = MODALITY_AUDIO
     supported_mimes = ("audio/mpeg",)
+    # Large cover art can confuse automatic probing of otherwise valid short MP3s.
+    # This adapter is selected only after verifying MPEG audio after the ID3 tag.
+    input_format = "mp3"
     _AIGC_DESCRIPTION = "AIGC"
 
     def detect_existing(self, path: str | Path) -> list[AIGCRecord]:
@@ -186,7 +190,7 @@ class Mp3Adapter(_AudioAdapter):
 
     def _decode_smoke(self, path: str | Path) -> None:
         cmd = [self.ffmpeg, "-v", "error", "-hide_banner", "-t", "2",
-               "-i", str(path), "-map", "0:a:0", "-f", "null", "-"]
+               "-f", self.input_format, "-i", str(path), "-map", "0:a:0", "-f", "null", "-"]
         out = subprocess.run(cmd, capture_output=True, text=True,
                              encoding="utf-8", errors="replace", timeout=300)
         if out.returncode != 0:

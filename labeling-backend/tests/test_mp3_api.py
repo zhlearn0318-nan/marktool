@@ -138,6 +138,46 @@ def test_fake_or_truncated_mp3_rejected(client):
     assert response.json()["error"]["code"] == "UNSUPPORTED_MEDIA_TYPE"
 
 
+def test_large_id3_cover_is_detected_without_truncating_upload(client, mp3_bytes, tmp_path):
+    import io
+    import random
+    from mutagen.id3 import APIC, ID3
+    from PIL import Image
+
+    source = tmp_path / "large-cover.mp3"
+    source.write_bytes(mp3_bytes)
+    tags = ID3(str(source))
+    image = Image.frombytes("RGB", (256, 256), random.Random(7).randbytes(256 * 256 * 3))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=90)
+    cover = buffer.getvalue()
+    assert len(cover) > 8192
+    tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="cover", data=cover))
+    tags.save(str(source), v2_version=4)
+    content = source.read_bytes()
+    assert len(content) > 8192
+    response = _upload(client, content, VALID_AIGC, name="renamed.bin")
+    done = _wait_terminal(client, response.json()["job_id"]) if response.status_code == 202 else response.json()
+    assert response.status_code == 202, done
+    assert done["status"] == "succeeded", done
+    assert done["input"]["sha256"] == hashlib.sha256(content).hexdigest()
+    output = client.get(done["links"]["output"])
+    labeled = tmp_path / "labeled.mp3"
+    labeled.write_bytes(output.content)
+    assert ID3(str(labeled)).getall("APIC")[0].data == cover
+    inspected = client.post("/api/v1/compliance-inspect",
+                            files={"file": ("cover.mp3", content, "audio/mpeg")})
+    assert inspected.status_code == 415
+    assert "尚不支持合规检测" in inspected.json()["error"]["message"]
+
+
+def test_large_declared_id3_without_audio_is_rejected(client):
+    header = b"ID3\x04\x00\x00\x7f\x7f\x7f\x7f"
+    response = _upload(client, header + b"x" * 10000, VALID_AIGC)
+    assert response.status_code == 415
+    assert response.json()["error"]["code"] == "UNSUPPORTED_MEDIA_TYPE"
+
+
 def test_id3v24_footer_offset_is_recognized():
     # ID3v2.4 footer 不属于 tag size；真实音频帧位于 footer 之后。
     head = b"ID3\x04\x00\x10\x00\x00\x00\x00" + b"3DI" + b"\x00" * 7 + b"\xff\xfb\x90\x00"

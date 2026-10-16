@@ -93,19 +93,27 @@ def _bmff_brands(head: bytes) -> set[bytes]:
     return brands
 
 
-def _looks_like_mp3(head: bytes) -> bool:
-    """识别 ID3v2 + MPEG frame 或裸 MPEG Layer 音频帧。"""
-    offset = 0
+def _mp3_frame_offset(head: bytes) -> int | None:
+    """Read the ID3 header without loading album art or other tag payloads."""
     if len(head) >= 10 and head[:3] == b"ID3":
         # ID3v2 tag size 使用四字节 synchsafe integer，标签之后必须有音频帧。
         if head[3] not in (2, 3, 4) or any(byte & 0x80 for byte in head[6:10]):
-            return False
+            return None
         offset = 10 + sum((byte & 0x7f) << shift
                           for byte, shift in zip(head[6:10], (21, 14, 7, 0)))
         # ID3v2.4 的 footer 标志表示 tag 后还有 10 字节 footer；其不计入
         # header 的 synchsafe size，必须跳过才能落到真正的 MPEG 帧。
         if head[3] == 4 and (head[5] & 0x10):
             offset += 10
+        return offset
+    return 0
+
+
+def _looks_like_mp3(head: bytes) -> bool:
+    """识别 ID3v2 + MPEG frame 或裸 MPEG Layer 音频帧。"""
+    offset = _mp3_frame_offset(head)
+    if offset is None:
+        return False
     if len(head) < offset + 4:
         return False
     b0, b1, b2 = head[offset:offset + 3]
@@ -113,6 +121,26 @@ def _looks_like_mp3(head: bytes) -> bool:
     return (b0 == 0xff and (b1 & 0xe0) == 0xe0 and (b1 & 0x18) != 0x08
             and (b1 & 0x06) != 0x00 and (b2 & 0xf0) not in (0x00, 0xf0)
             and (b2 & 0x0c) != 0x0c)
+
+
+async def detect_upload_mime(upload, head: bytes) -> str | None:
+    """Sniff uploads, seeking past large ID3 tags with constant memory use.
+
+    Restore the cursor after the initial header so saving/hashing still includes
+    every uploaded byte. ID3 alone is never enough: an MPEG frame must follow.
+    """
+    mime = detect_mime(head, upload.filename)
+    if mime is not None or not head.startswith(b"ID3"):
+        return mime
+    offset = _mp3_frame_offset(head)
+    if offset is None or offset + 4 <= len(head):
+        return None
+    try:
+        await upload.seek(offset)
+        frame = await upload.read(4)
+    finally:
+        await upload.seek(len(head))
+    return "audio/mpeg" if _looks_like_mp3(frame) else None
 
 
 SUPPORTED_MIMES = (

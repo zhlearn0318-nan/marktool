@@ -25,7 +25,7 @@ from ..core.errors import (FILE_TOO_LARGE, INTERNAL_ERROR,
                            UNSUPPORTED_MEDIA_TYPE, ApiError)
 from ..core.image_bridge import build_inspector, resolve_registry_path, to_report
 from ..core.inspector import MetadataComplianceInspector
-from ..core.mimetype import SNIFF_BYTES, detect_mime, suffix_for_mime
+from ..core.mimetype import SNIFF_BYTES, detect_upload_mime, suffix_for_mime
 from ..core.reader import ReaderError
 from ..core.storage import FileStorage
 from ..metadata.compliance import ComplianceInspectionError
@@ -50,7 +50,7 @@ async def inspect_media(
 
     # ---- 头部探测真实类型（§9.1 第 3 步，不信任扩展名）----
     head = await file.read(SNIFF_BYTES)
-    mime = detect_mime(head, file.filename)
+    mime = await detect_upload_mime(file, head)
     if mime is None:
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        "无法识别的文件格式，合规检测支持 JPEG、PNG、MP4、"

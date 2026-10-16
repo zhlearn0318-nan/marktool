@@ -23,7 +23,7 @@ from ..core.errors import (AIGC_CHARACTER_INVALID, AIGC_METADATA_EXISTS,
                            INVALID_MULTIPART, JOB_NOT_FOUND,
                            MODALITY_MISMATCH, UNSUPPORTED_MEDIA_TYPE, ApiError)
 from ..core.image_bridge import read_existing_records
-from ..core.mimetype import SNIFF_BYTES, detect_mime
+from ..core.mimetype import SNIFF_BYTES, detect_upload_mime
 from ..core.storage import FileStorage
 from ..core.store import JobStore
 from ..core.worker import JobWorker
@@ -89,6 +89,7 @@ async def create_job(
 
     # ---- 保存原文件，边写边算 SHA-256（§9.1 第 5/6 步）----
     head = await file.read(SNIFF_BYTES)
+    mime = await detect_upload_mime(file, head)
     h = hashlib.sha256(head)
     size = len(head)
     stored = storage.new_stored_name("")
@@ -113,7 +114,6 @@ async def create_job(
     # ---- 按文件内容识别真实格式（§9.1 第 3 步）----
     # 文本类（Markdown）无魔数，需借扩展名做必要前提 —— 但内容健全性仍要过，
     # 改扩展名骗不过：把 PNG 命名成 .md，按内容判出来仍是 image/png（§13）。
-    mime = detect_mime(head, file.filename)
     if mime is None:
         storage.discard(path)
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,

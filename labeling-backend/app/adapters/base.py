@@ -47,6 +47,7 @@ class BaseAdapter:
     carrier_id = ""
     modality = ""
     supported_mimes: tuple[str, ...] = ()
+    input_format: str | None = None
 
     def __init__(self, exiftool: str = "exiftool", ffprobe: str = "ffprobe",
                  ffmpeg: str = "ffmpeg", exiftool_config: str | None = None):
@@ -122,8 +123,10 @@ class BaseAdapter:
 
     # ---- ffprobe 工具 ----
     def _ffprobe_json(self, path: str | Path) -> dict:
-        cmd = [self.ffprobe, "-v", "error",
-               "-show_entries", "format=format_name,duration"
+        cmd = [self.ffprobe, "-v", "error"]
+        if self.input_format:
+            cmd += ["-f", self.input_format]
+        cmd += ["-show_entries", "format=format_name,duration"
                ":stream=codec_type,codec_name,width,height,sample_rate,channels",
                "-of", "json", str(path)]
         out = subprocess.run(cmd, capture_output=True, text=True,
