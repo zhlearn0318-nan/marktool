@@ -38,3 +38,17 @@ MODALITY_TEXT = "text"
 
 # 标准字段（§7.2 request）
 STANDARD = "GB45438-2025"
+
+MODALITY_AUDIO = "audio"
+
+MODALITY_BY_MIME = {
+    "image/jpeg": MODALITY_IMAGE,
+    "image/png": MODALITY_IMAGE,
+    "video/mp4": MODALITY_VIDEO,
+    "audio/mp4": MODALITY_AUDIO,
+    "audio/mpeg": MODALITY_AUDIO,
+    "text/markdown": MODALITY_TEXT,
+    "application/pdf": MODALITY_TEXT,
+    "text/html": MODALITY_TEXT,
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": MODALITY_TEXT,
+}

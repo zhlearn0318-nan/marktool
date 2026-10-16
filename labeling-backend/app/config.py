@@ -40,6 +40,7 @@ class Settings:
     # §4.5：各模态共用同一套接口，由后端按真实文件类型选择载体适配器
     capabilities: dict = field(default_factory=lambda: {
         "image/jpeg": True, "image/png": True, "video/mp4": True,
+        "audio/mp4": True, "audio/mpeg": True,
         "text/markdown": True, "application/pdf": True, "text/html": True,
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": True})
 

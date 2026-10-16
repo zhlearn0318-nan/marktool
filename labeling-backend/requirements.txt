@@ -13,3 +13,6 @@ jsonschema>=4.23
 #   app/core/pdfstruct.py 纯字节扫描判定——不为一个字段多背一个解析器；
 # - Markdown 的 frontmatter 解析用上面已有的 PyYAML。
 # （原计划里的 pypdf 已在实施中移除，理由见 docs/markdown-pdf-carrier-validation.md。）
+
+# MP3 ID3v2 TXXX:AIGC
+mutagen>=1.47

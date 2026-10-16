@@ -36,6 +36,8 @@ capabilities:
   image/jpeg: true
   image/png: true
   video/mp4: true
+  audio/mp4: true
+  audio/mpeg: true
   text/markdown: true
   application/pdf: true
   text/html: true

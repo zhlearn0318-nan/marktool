@@ -55,6 +55,9 @@ async def inspect_media(
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        "无法识别的文件格式，合规检测支持 JPEG、PNG、MP4、"
                        "Markdown、PDF、HTML 与 DOCX。")
+    if mime in ("audio/mp4", "audio/mpeg"):
+        raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
+                       f"{mime} 当前仅支持元数据打标，尚不支持合规检测。")
     if not settings.capabilities.get(mime, False):
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        f"合规检测不支持该格式（收到 {mime}）。")

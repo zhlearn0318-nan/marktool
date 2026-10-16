@@ -10,7 +10,7 @@ import codecs
 
 # 上传时预读的字节数。JPEG/PNG/BMFF 只需前 16 字节，但 PDF 的 %PDF- 可能被
 # 前导垃圾/增量更新推到稍后，文本格式也要足够样本才能做 UTF-8 健全性判断。
-SNIFF_BYTES = 4096
+SNIFF_BYTES = 8192
 
 # PDF 签名允许出现的最大偏移（规范要求首行，但容忍少量前导字节）
 _PDF_SIGNATURE_WINDOW = 1024
@@ -57,7 +57,11 @@ def detect_mime(head: bytes, filename: str | None = None) -> str | None:
         return "image/png"
     # ISO BMFF：偏移 4 处为 'ftyp'
     if len(head) >= 12 and head[4:8] == b"ftyp":
+        if b"M4A " in _bmff_brands(head):
+            return "audio/mp4"
         return "video/mp4"
+    if _looks_like_mp3(head):
+        return "audio/mpeg"
     # PDF：以 %PDF- 开头；容忍前导垃圾（增量更新/传输噪声）
     if head[:_PDF_SIGNATURE_WINDOW].find(b"%PDF-") >= 0:
         return "application/pdf"
@@ -77,8 +81,42 @@ def detect_mime(head: bytes, filename: str | None = None) -> str | None:
     return None
 
 
+def _bmff_brands(head: bytes) -> set[bytes]:
+    """返回已读取 ftyp box 中的 major 与 compatible brands。"""
+    brands = {head[8:12]}
+    if len(head) < 16:
+        return brands
+    size = int.from_bytes(head[:4], "big")
+    end = min(len(head), size) if size >= 16 else len(head)
+    for offset in range(16, end - 3, 4):
+        brands.add(head[offset:offset + 4])
+    return brands
+
+
+def _looks_like_mp3(head: bytes) -> bool:
+    """识别 ID3v2 + MPEG frame 或裸 MPEG Layer 音频帧。"""
+    offset = 0
+    if len(head) >= 10 and head[:3] == b"ID3":
+        # ID3v2 tag size 使用四字节 synchsafe integer，标签之后必须有音频帧。
+        if head[3] not in (2, 3, 4) or any(byte & 0x80 for byte in head[6:10]):
+            return False
+        offset = 10 + sum((byte & 0x7f) << shift
+                          for byte, shift in zip(head[6:10], (21, 14, 7, 0)))
+        # ID3v2.4 的 footer 标志表示 tag 后还有 10 字节 footer；其不计入
+        # header 的 synchsafe size，必须跳过才能落到真正的 MPEG 帧。
+        if head[3] == 4 and (head[5] & 0x10):
+            offset += 10
+    if len(head) < offset + 4:
+        return False
+    b0, b1, b2 = head[offset:offset + 3]
+    # MPEG audio sync + 合法 version/layer/bitrate/sample-rate 组合。
+    return (b0 == 0xff and (b1 & 0xe0) == 0xe0 and (b1 & 0x18) != 0x08
+            and (b1 & 0x06) != 0x00 and (b2 & 0xf0) not in (0x00, 0xf0)
+            and (b2 & 0x0c) != 0x0c)
+
+
 SUPPORTED_MIMES = (
-    "image/jpeg", "image/png", "video/mp4", "text/markdown",
+    "image/jpeg", "image/png", "video/mp4", "audio/mp4", "audio/mpeg", "text/markdown",
     "application/pdf", "text/html",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 )
@@ -88,6 +126,8 @@ SUFFIX_BY_MIME = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "video/mp4": ".mp4",
+    "audio/mp4": ".m4a",
+    "audio/mpeg": ".mp3",
     "text/markdown": ".md",
     "application/pdf": ".pdf",
     "text/html": ".html",

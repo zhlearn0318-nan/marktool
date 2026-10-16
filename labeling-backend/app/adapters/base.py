@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -49,7 +50,9 @@ class BaseAdapter:
 
     def __init__(self, exiftool: str = "exiftool", ffprobe: str = "ffprobe",
                  ffmpeg: str = "ffmpeg", exiftool_config: str | None = None):
-        self.exiftool = exiftool
+        # 保持调用方传入显式路径的优先级；默认命令名可由当前进程的
+        # EXIFTOOL_PATH 覆盖，便于便携版和测试环境，不改变部署默认值。
+        self.exiftool = os.environ.get("EXIFTOOL_PATH", exiftool) if exiftool == "exiftool" else exiftool
         self.ffprobe = ffprobe
         self.ffmpeg = ffmpeg
         self.exiftool_config = exiftool_config

@@ -32,25 +32,10 @@ from .deps import get_settings, get_storage, get_store, get_worker
 
 router = APIRouter(prefix="/api/v1", tags=["metadata-label-jobs"])
 
-# 真实文件类型 → 模态。文档类（Markdown / PDF，以及队友负责的 HTML / DOCX）
-# 统一归 text：它们是同一类东西，前端不该为四个格式各写一套逻辑（§7.2）。
-_MODALITY_BY_MIME = {
-    "video/mp4": jobs.MODALITY_VIDEO,
-    "text/markdown": jobs.MODALITY_TEXT,
-    "application/pdf": jobs.MODALITY_TEXT,
-    "text/html": jobs.MODALITY_TEXT,
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": jobs.MODALITY_TEXT,
-}
-
-
-def _real_modality(mime: str) -> str:
-    return _MODALITY_BY_MIME.get(mime, jobs.MODALITY_IMAGE)
-
-
 @router.post("/metadata-label-jobs", status_code=202)
 async def create_job(
         req_request: Request,
-        file: Annotated[UploadFile, File(description="JPEG、PNG、MP4、Markdown、PDF、HTML 或 DOCX")],
+        file: Annotated[UploadFile, File(description="JPEG、PNG、MP4、M4A、MP3、Markdown、PDF、HTML 或 DOCX")],
         request_json: Annotated[str, Form(alias="request", description="application/json 标注参数")],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
         settings: Settings = Depends(get_settings),
@@ -78,10 +63,10 @@ async def create_job(
         raise ApiError(422, AIGC_SCHEMA_INVALID, "standard 必须为 GB45438-2025。",
                        [{"field": "standard", "reason": "固定为 GB45438-2025"}])
     modality = req.get("modality")
-    if modality not in (jobs.MODALITY_IMAGE, jobs.MODALITY_VIDEO, jobs.MODALITY_TEXT):
+    if modality not in (jobs.MODALITY_IMAGE, jobs.MODALITY_VIDEO, jobs.MODALITY_AUDIO, jobs.MODALITY_TEXT):
         raise ApiError(422, AIGC_SCHEMA_INVALID,
-                       "modality 必须为 image、video 或 text。",
-                       [{"field": "modality", "reason": "仅支持 image/video/text"}])
+                       "modality 必须为 image、video、audio 或 text。",
+                       [{"field": "modality", "reason": "仅支持 image/video/audio/text"}])
     policy = req.get("existing_metadata_policy", jobs.POLICY_REJECT)
     if policy not in jobs.POLICIES:
         raise ApiError(422, AIGC_SCHEMA_INVALID,
@@ -132,14 +117,14 @@ async def create_job(
     if mime is None:
         storage.discard(path)
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
-                       "无法识别的文件格式，仅支持 JPEG、PNG、MP4、Markdown、PDF、HTML 与 DOCX。")
+                       "无法识别的文件格式，仅支持 JPEG、PNG、MP4、M4A、MP3、Markdown、PDF、HTML 与 DOCX。")
     if not settings.capabilities.get(mime, False):
         storage.discard(path)
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        f"格式 {mime} 的适配器尚未实现。")
 
     # ---- 声明模态 vs 真实类型（§9.1 第 4 步）----
-    real_modality = _real_modality(mime)
+    real_modality = jobs.MODALITY_BY_MIME[mime]
     if modality != real_modality:
         storage.discard(path)
         raise ApiError(422, MODALITY_MISMATCH,
