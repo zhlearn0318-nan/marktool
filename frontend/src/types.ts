@@ -35,11 +35,12 @@ export interface DetectResponse {
 }
 
 /** 打标任务请求（对应 labeling-backend POST /api/v1/metadata-label-jobs 的 request 字段）
- *  modality 必须与文件真实类型一致（JPEG/PNG → image，MP4 → video），
- *  后端按文件头复核，不符返回 422 MODALITY_MISMATCH。 */
+ *  modality 必须与文件真实类型一致（JPEG/PNG → image，MP4 → video，
+ *  Markdown / PDF / HTML / DOCX → text），后端按文件头复核，
+ *  不符返回 422 MODALITY_MISMATCH。 */
 export interface LabelJobRequest {
   standard: string;
-  modality: "image" | "video";
+  modality: "image" | "video" | "text";
   existing_metadata_policy: "reject" | "replace";
   AIGC: {
     Label: string;
@@ -153,9 +154,15 @@ export interface RepairInspection {
   detected_format: string;
   mime_type: string;
   file_sha256: string;
-  pixel_sha256: string;
+  /** 内容指纹：跨文件比对"是不是同一份内容"（与 file_sha256 不同，后者含元数据）。
+   *  fingerprint_kind 说明它是什么：pixel（图片像素）/ stream（视频 mdat 载荷）/
+   *  body（Markdown 正文）/ content（PDF 内容流载荷）。 */
+  content_fingerprint: string;
+  fingerprint_kind: "pixel" | "stream" | "body" | "content" | string;
   record_count: number;
-  aigc_metadata?: { AIGC?: Record<string, unknown> } | null;
+  /** 解析出的**内层**七字段（不是 {"AIGC": …} 外层壳）——与后端
+   *  `post.aigc_metadata != document["AIGC"]` 的比对形状一致。 */
+  aigc_metadata?: Record<string, unknown> | null;
   issues: ComplianceIssue[];
   project_policy: { accepted: boolean; errors: string[] };
   cross_reader: { status: string; detail?: string | null };
@@ -177,7 +184,8 @@ export interface RepairPlanResponse {
     detected_mime_type: string;
     size_bytes: number;
     sha256: string;
-    pixel_sha256: string;
+    content_fingerprint: string;
+    fingerprint_kind: string;
     /** 原文件是否还在（过期清理后为 false，此时不能再确认执行） */
     available: boolean;
     expires_at: string | null;
@@ -219,10 +227,10 @@ export interface RepairJobResponse {
     expires_at: string;
   } | null;
   /** 修复后的复检：post_repair_conclusion 应为 compliant，
-   *  pixel_sha256_unchanged 必须为 true（修复只动元数据，不动像素） */
+   *  content_fingerprint_unchanged 必须为 true（修复只动元数据，不动内容） */
   validation?: {
     post_repair_conclusion?: string;
-    pixel_sha256_unchanged?: boolean;
+    content_fingerprint_unchanged?: boolean;
     post_repair_inspection?: Record<string, unknown>;
   } | null;
   error?: { code: string; message: string; retryable: boolean } | null;

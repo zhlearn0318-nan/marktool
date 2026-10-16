@@ -31,17 +31,25 @@ class AIGCRecord:
     location: str | None = None
 
 
-def carrier_location(tag_key: str) -> str | None:
+def carrier_location(tag_key: str, *, mime: str | None = None) -> str | None:
     """按 ExifTool 组把 tag_key 映射成载体位置描述（诊断用，仅增不改判定）。
 
-    - XMP（规范新载体）：顶层 Adobe-XMP uuid 盒（usertype be7acfcb…）内 XMP 包。
+    - XMP（规范新载体）：容器不同落点不同，故按 mime 分述。
     - QuickTime（旧载体）：moov/udta/meta/ilst 的数据原子（如 ©cmt）。
+    - PDF:（旧载体）：Document Info 字典键。
     其余（uuid 盒、其他命名空间）返回 None，交由上层用 tag_key 原文兜底。
+
+    ``mime`` 缺省（None）时返回值与接入文档格式之前**逐字一致**——MP4 路径的
+    既有报告文案不受影响。
     """
     if tag_key.startswith("XMP"):
+        if mime == "application/pdf":
+            return "PDF XMP 元数据包（Metadata 流）"
         return "XMP 新载体（顶层 Adobe-XMP uuid 盒内 XMP 包）"
     if tag_key.startswith("QuickTime"):
         return "QuickTime 旧载体（moov/udta/meta/ilst 数据原子）"
+    if mime == "application/pdf" and tag_key.startswith("PDF"):
+        return "PDF Document Info 字典键（旧载体）"
     return None
 
 
@@ -85,8 +93,13 @@ def _looks_like_aigc(tag_key: str, value: str) -> bool:
 
 
 def read_aigc_records(path: str, exiftool: str = "exiftool",
-                      config: str | None = None) -> list[AIGCRecord]:
-    """扫描文件全部元数据标签，返回所有 AIGC 记录（保持标签顺序）。"""
+                      config: str | None = None,
+                      mime: str | None = None) -> list[AIGCRecord]:
+    """扫描文件全部元数据标签，返回所有 AIGC 记录（保持标签顺序）。
+
+    ``mime`` 只影响 location 的措辞（同一处 XMP 在不同容器里落点不同），
+    判定逻辑与 MIME 无关。
+    """
     meta = exiftool_tags(path, exiftool, config)
     records: list[AIGCRecord] = []
     for key, val in meta.items():
@@ -95,5 +108,5 @@ def read_aigc_records(path: str, exiftool: str = "exiftool",
             if _looks_like_aigc(key, v):
                 records.append(AIGCRecord(tag_key=key, raw=v,
                                           aigc=aigc.parse_aigc(v),
-                                          location=carrier_location(key)))
+                                          location=carrier_location(key, mime=mime)))
     return records

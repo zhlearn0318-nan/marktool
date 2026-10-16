@@ -24,19 +24,24 @@ export async function detectImage(
   return res.json();
 }
 
-/** 按文件推导 modality（JPEG/PNG → image，其余 → video）。
+/** 按文件推导 modality（JPEG/PNG → image，MP4 → video，文档 → text）。
  *
  *  只是给后端的声明，不代替后端校验：后端按文件头复核，不符返回 422。
- *  认不出扩展名时按 .mp4 之外的都当 image 更危险，故回落到 video。 */
-export function modalityForFile(file: File): "image" | "video" {
+ *  认不出扩展名时按 .mp4 之外的都当 image 更危险，故回落到 video。
+ *
+ *  文档类（Markdown / PDF，以及 HTML / DOCX）**统一用 text**——它们是同一类
+ *  东西，不该为四个格式各写一套逻辑；后端也用同一个值（app/core/jobs.py
+ *  MODALITY_TEXT）。 */
+export function modalityForFile(file: File): "image" | "video" | "text" {
   const ext = file.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
   if (["jpg", "jpeg", "png"].includes(ext)) return "image";
   if (file.type.startsWith("image/")) return "image";
+  if (["md", "markdown", "pdf"].includes(ext)) return "text";
   return "video";
 }
 
 /** 合规检测（POST /api/v1/compliance-inspect，只读，同步返回报告）。
- *  支持 JPEG / PNG / MP4，三种格式返回同构报告。 */
+ *  支持 JPEG / PNG / MP4 与文档（Markdown / PDF），各格式返回同构报告。 */
 export async function inspectMedia(file: File): Promise<ComplianceReport> {
   const form = new FormData();
   form.append("file", file);

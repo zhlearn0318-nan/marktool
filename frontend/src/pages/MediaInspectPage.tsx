@@ -43,9 +43,10 @@ const SEVERITY_TAG: Record<string, "error" | "warning" | "default"> = {
   info: "default",
 };
 
-/** 与后端能力表一致（§4.5 图片/视频共用同一套检测接口） */
+/** 与后端能力表一致（§4.5 各模态共用同一套检测接口） */
 const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png"];
-const ACCEPT = ".mp4,.jpg,.jpeg,.png,video/mp4,image/jpeg,image/png";
+const ACCEPT = ".mp4,.jpg,.jpeg,.png,.md,.markdown,.pdf,"
+  + "video/mp4,image/jpeg,image/png,text/markdown,application/pdf";
 
 function chip(label: string, value: string | undefined | null, color?: string) {
   return value ? <Tag color={color}>{label}: {value}</Tag> : null;
@@ -124,7 +125,7 @@ export default function MediaInspectPage() {
 
   async function submit() {
     if (!file) {
-      message.warning("请先选择待检测的文件（MP4 / JPEG / PNG）");
+      message.warning("请先选择待检测的文件（MP4 / JPEG / PNG / Markdown / PDF）");
       return;
     }
     setLoading(true);
@@ -160,9 +161,9 @@ export default function MediaInspectPage() {
   return (
     <>
       <PageBanner
-        eyebrow="COMPLIANCE · MP4 / JPEG / PNG"
+        eyebrow="COMPLIANCE · MP4 / JPEG / PNG / Markdown / PDF"
         title="媒体合规检测"
-        sub="上传 MP4 / JPEG / PNG，按 GB 45438—2025 只读检测已有 AIGC 元数据隐式标识是否合规，全程不改动文件。"
+        sub="上传 MP4 / JPEG / PNG / Markdown / PDF，按 GB 45438—2025 只读检测已有 AIGC 元数据隐式标识是否合规，全程不改动文件。"
       />
 
       <section className="section">
@@ -196,7 +197,7 @@ export default function MediaInspectPage() {
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽 MP4 / JPEG / PNG 到此处</p>
+                <p className="ant-upload-text">点击或拖拽文件到此处（MP4 / JPEG / PNG / Markdown / PDF）</p>
                 <p className="ant-upload-hint">
                   单文件 · 按文件内容判定真实格式 · 只读检测不修改文件
                 </p>
@@ -391,7 +392,7 @@ export default function MediaInspectPage() {
                               检测器: {report.detector_version} · ExifTool:{" "}
                               {report.exiftool_version ?? "-"} · 耗时: {report.elapsed_ms} ms
                               <br />
-                              {/* BMFF box 结构是 MP4 专有；图片报告 applicable=false，整行不显示 */}
+                              {/* BMFF box 结构是 MP4 专有；图片与文档报告 applicable=false，整行不显示 */}
                               {report.bmff.applicable === false ? (
                                 <>载体结构: {report.bmff.note ?? "图片无 BMFF box 结构"}</>
                               ) : (

@@ -246,7 +246,7 @@ def test_confirmed_repair_keeps_original_and_returns_one_valid_record(
         "identity_verified": False,
     }
     assert completed["validation"]["post_repair_conclusion"] == "compliant"
-    assert completed["validation"]["pixel_sha256_unchanged"] is True
+    assert completed["validation"]["content_fingerprint_unchanged"] is True
 
     expires = datetime.fromisoformat(completed["output"]["expires_at"].replace("Z", "+00:00"))
     remaining_days = (expires - datetime.now(timezone.utc)).total_seconds() / 86400
