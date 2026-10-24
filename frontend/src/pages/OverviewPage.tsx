@@ -21,10 +21,13 @@ const STACK = [
 ];
 
 const MATRIX = [
-  ["图片", "✅ 已上线", "✅ 元数据(真实)", "⚙ 接口就绪"],
-  ["文本", "⚙ 规划中", "⚙ 规划中", "—"],
-  ["音频", "⚙ 规划中", "⚙ 规划中", "⚙ 规划中"],
-  ["视频", "⚙ 规划中", "⚙ 规划中", "—"],
+  ["图片", "✅ 已上线", "✅ 元数据", "⚙ 接口就绪"],
+  ["文本", "✅ 隐式标识", "✅ 尾段元数据", "—"],
+  ["音频", "✅ M4A 隐式标识", "✅ XMP-aigc", "—"],
+  ["视频", "✅ 隐式标识", "✅ XMP-aigc", "—"],
+  ["多模态", "✅ 拆分 / 重组", "✅ 按文件校验", "—"],
+  ["虚拟场景", "✅ 显式 + 隐式", "✅ 起始画面", "—"],
+  ["交互场景", "✅ 界面显式 + 内容隐式", "✅ 内容文件", "—"],
 ];
 
 export default function OverviewPage({ onNavigate }: { onNavigate: (v: View) => void }) {
@@ -81,7 +84,7 @@ export default function OverviewPage({ onNavigate }: { onNavigate: (v: View) => 
                 </tbody>
               </table>
               <div style={{ padding: "14px 16px", fontSize: 12.5, color: "var(--text-400)" }}>
-                ✅ 已上线 · ⚙ 规划中。当前 MVP 聚焦图片模态的真实元数据检测与报告。
+                ✅ 已上线 · ⚙ 规划中。多模态、虚拟场景与交互场景由打标服务提供，标准互转仍未实现。
               </div>
             </div>
           </div>

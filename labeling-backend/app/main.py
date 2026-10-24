@@ -14,7 +14,7 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .api import health, inspect, jobs
+from .api import composite_routes, health, inspect, jobs
 from .api import repair_routes
 from .api.repair_routes import (
     get_metadata_repair_service,
@@ -35,6 +35,15 @@ _MULTIPART_PATHS = frozenset({
     "/api/v1/metadata-label-jobs",
     "/api/v1/compliance-inspect",
     "/api/v1/metadata-repair-plans",
+    "/api/v1/multimodal/label",
+    "/api/v1/multimodal/parse",
+    "/api/v1/multimodal/verify",
+    "/api/v1/scenes/virtual/label",
+    "/api/v1/scenes/virtual/parse",
+    "/api/v1/scenes/virtual/verify",
+    "/api/v1/scenes/interactive/label",
+    "/api/v1/scenes/interactive/parse",
+    "/api/v1/scenes/interactive/verify",
 })
 
 
@@ -128,6 +137,7 @@ def create_app(settings: Settings | None = None,
     app.include_router(inspect.router)
     # 修复工作台（计划 → 显式确认 → 异步执行 → 审计）。路径独立，与标注/检测不冲突。
     app.include_router(repair_routes.router)
+    app.include_router(composite_routes.router)
     return app
 
 

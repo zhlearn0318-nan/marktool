@@ -82,7 +82,9 @@ python3 -m venv .venv
 - ⏳ 待队友：图片（JPEG/PNG）适配器 —— `app/adapters/image.py` 已留扩展点，
   媒体完整性校验（可解码、宽高不变，§6.3）待补充。当前 `/api/v1/health` 返回
   `image/jpeg: false, image/png: false`，前端据此禁用图片入口（§7.5）。
-- 首期**不在范围内**（§3.2）：C2PA 互转、AI 概率检测、数字签名、文本/音频模态、批量上传。
+- 多模态、文本、音频（M4A）、虚拟场景与交互场景见仓库根目录 `README.md` 与 `docs/技术交接文档.md`。
+  命令行：在本目录执行 `python -m app.cli --help`。
+- 仍不在范围内：C2PA 互转、AI 概率检测、数字签名、内容水印（标准第 6.2 条不做要求）。
 
 ## 参考
 

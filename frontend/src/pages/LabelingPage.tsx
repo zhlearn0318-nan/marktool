@@ -213,9 +213,9 @@ export default function LabelingPage() {
                   onChange={setLabel}
                   style={{ width: "100%" }}
                   options={[
-                    { value: "1", label: "1 · 人工智能生成内容" },
-                    { value: "2", label: "2 · 人工智能合成内容" },
-                    { value: "3", label: "3 · 其他" },
+                    { value: "1", label: "1 · 属于人工智能生成合成内容" },
+                    { value: "2", label: "2 · 可能为人工智能生成合成内容" },
+                    { value: "3", label: "3 · 疑似为人工智能生成合成内容" },
                   ]}
                 />
               </div>

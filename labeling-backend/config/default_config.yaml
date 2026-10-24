@@ -34,3 +34,7 @@ capabilities:
   image/jpeg: true
   image/png: true
   video/mp4: true
+  # 多模态与场景标识走 /api/v1/multimodal 与 /api/v1/scenes，不改变单文件打标入口
+  multimodal: true
+  scene/virtual: true
+  scene/interactive: true

@@ -7,6 +7,7 @@ import type {
   RepairJobResponse,
   RepairPlanOptions,
   RepairPlanResponse,
+  SceneReport,
 } from "./types";
 
 export async function detectImage(
@@ -158,6 +159,121 @@ export async function getRepairJob(jobId: string): Promise<RepairJobResponse> {
   const res = await fetch(`/api/v1/metadata-repair-jobs/${jobId}`);
   if (!res.ok) throw await repairError(res, "查询修复任务失败");
   return res.json();
+}
+
+/* ===== 多模态与场景（同一 labeling-backend，/api/v1） ===== */
+
+async function compositeError(res: Response, fallback: string): Promise<Error> {
+  const body = await res.json().catch(() => null);
+  const err = body?.error ?? null;
+  const code = err?.code ? `${err.code}: ` : "";
+  const message = err?.message || fallback;
+  return new Error(`${code}${message}（HTTP ${res.status}）`);
+}
+
+function aigcPayload(producer: string, label: string) {
+  const produceId = crypto.randomUUID().toUpperCase();
+  return {
+    Label: label,
+    ContentProducer: producer,
+    ProduceID: produceId,
+    ReservedCode1: "",
+    ContentPropagator: producer,
+    PropagateID: produceId,
+    ReservedCode2: "",
+  };
+}
+
+/** 上传一段视频，拆成画面、音频、字幕后分别打标，再校验重组文件。 */
+export async function labelMultimodal(file: File, producer: string, label: string): Promise<SceneReport> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append(
+    "request",
+    JSON.stringify({
+      standard: "GB45438-2025",
+      existing_metadata_policy: "reject",
+      AIGC: aigcPayload(producer, label),
+    })
+  );
+  const res = await fetch("/api/v1/multimodal/label", { method: "POST", body: form });
+  if (!res.ok) throw await compositeError(res, "多模态打标失败");
+  return res.json();
+}
+
+export async function verifyMultimodal(file: File): Promise<SceneReport> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/v1/multimodal/verify", { method: "POST", body: form });
+  if (!res.ok) throw await compositeError(res, "多模态校验失败");
+  return res.json();
+}
+
+export async function labelVirtualScene(options: {
+  producer: string;
+  label: string;
+  text: string;
+  position: string;
+  duringService: boolean;
+  file?: File | null;
+}): Promise<SceneReport> {
+  const form = new FormData();
+  if (options.file) form.append("file", options.file);
+  form.append(
+    "request",
+    JSON.stringify({
+      standard: "GB45438-2025",
+      AIGC: aigcPayload(options.producer, options.label),
+      explicit: {
+        text: options.text,
+        position: options.position,
+        during_service: options.duringService,
+        color: "#FFFFFF",
+        background: "#102033",
+      },
+    })
+  );
+  const res = await fetch("/api/v1/scenes/virtual/label", { method: "POST", body: form });
+  if (!res.ok) throw await compositeError(res, "虚拟场景打标失败");
+  return res.json();
+}
+
+export async function labelInteractiveScene(options: {
+  producer: string;
+  label: string;
+  text: string;
+  placements: string[];
+  color: string;
+  background: string;
+  content?: File | null;
+  contentRole?: string;
+}): Promise<SceneReport> {
+  const form = new FormData();
+  if (options.content) form.append("file", options.content);
+  form.append(
+    "request",
+    JSON.stringify({
+      standard: "GB45438-2025",
+      content_role: options.content ? options.contentRole : undefined,
+      AIGC: options.content ? aigcPayload(options.producer, options.label) : undefined,
+      explicit: {
+        text: options.text,
+        placements: options.placements,
+        persistent: true,
+        color: options.color,
+        background: options.background,
+      },
+    })
+  );
+  const res = await fetch("/api/v1/scenes/interactive/label", { method: "POST", body: form });
+  if (!res.ok) throw await compositeError(res, "交互场景打标失败");
+  return res.json();
+}
+
+export async function downloadComposite(url: string): Promise<Blob> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("下载结果包失败");
+  return res.blob();
 }
 
 /** 第四步：下载修复结果文件（GET /api/v1/metadata-repair-jobs/{job_id}/output） */

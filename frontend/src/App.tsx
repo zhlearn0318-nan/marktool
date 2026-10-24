@@ -13,6 +13,8 @@ import ApiPage from "./pages/ApiPage";
 import HelpPage from "./pages/HelpPage";
 import ConsolePage from "./pages/ConsolePage";
 import LabelingPage from "./pages/LabelingPage";
+import MultimodalPage from "./pages/MultimodalPage";
+import ScenesPage from "./pages/ScenesPage";
 import MediaInspectPage from "./pages/MediaInspectPage";
 import RepairPage from "./pages/RepairPage";
 import type { DetectResponse } from "./types";
@@ -55,6 +57,10 @@ export default function App() {
         return <ConsolePage onNavigate={setView} />;
       case "labeling":
         return <LabelingPage />;
+      case "multimodal":
+        return <MultimodalPage />;
+      case "scenes":
+        return <ScenesPage />;
       case "mediaInspect":
         return <MediaInspectPage />;
       case "mediaRepair":

@@ -312,3 +312,56 @@ export interface ComplianceReport {
   exiftool_version: string | null;
   elapsed_ms: number;
 }
+
+/* ===== 多模态与场景标识（/api/v1/multimodal、/api/v1/scenes） ===== */
+
+export interface ClauseCheck {
+  id: string;
+  clause: string;
+  passed: boolean;
+  severity: "error" | "warning";
+  message: string;
+}
+
+export interface ModalityComponentReport {
+  role: string;
+  passed: boolean;
+  file_name?: string;
+  carrier?: string;
+  produce_id?: string;
+  checks: ClauseCheck[];
+  labels?: Record<string, string>[];
+}
+
+export interface SceneReport {
+  passed: boolean;
+  operation?: string;
+  scene_type?: string;
+  combination?: string;
+  recombined_kind?: string;
+  notes?: string[];
+  bundle_id?: string;
+  download_url?: string;
+  request_id?: string;
+  components?: ModalityComponentReport[];
+  recombined?: {
+    passed: boolean;
+    file_name?: string;
+    carrier?: string;
+    kind?: string;
+    checks: ClauseCheck[];
+    implicit_label?: Record<string, string> | null;
+  };
+  checks?: ClauseCheck[];
+  explicit?: {
+    text?: string;
+    position?: string;
+    placements?: string[];
+    persistent?: boolean;
+    color?: string;
+    background?: string;
+    height_ratio?: number;
+  };
+  implicit_label?: Record<string, string> | null;
+  service_hint?: { enabled?: boolean; position?: string; note?: string };
+}
