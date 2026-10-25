@@ -3,7 +3,16 @@ import { Alert, Collapse, Tag, Upload, message } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
 import ToolSteps from "../components/ToolSteps";
-import { confirmCompositeRepair, createCompositeRepairPlan, getHealth, inspectMedia } from "../api";
+import {
+  confirmCompositeRepair,
+  confirmRepairPlan,
+  createCompositeRepairPlan,
+  createRepairPlan,
+  downloadRepairOutput,
+  getHealth,
+  getRepairJob,
+  inspectMedia,
+} from "../api";
 import { C2PA_ZH, MEDIA_STATUS_ZH, REASON_ZH, REPAIR_ZH } from "../reasonCodes";
 import type {
   ComplianceCandidate,
@@ -11,7 +20,19 @@ import type {
   ComplianceIssue,
   ComplianceReport,
   CompositeRepairPlan,
+  ConflictGroup,
+  RepairJobResponse,
 } from "../types";
+
+const AIGC_FIELDS = [
+  "Label",
+  "ContentProducer",
+  "ProduceID",
+  "ReservedCode1",
+  "ContentPropagator",
+  "PropagateID",
+  "ReservedCode2",
+] as const;
 
 const CONCLUSION_META: Record<
   ComplianceConclusion,
@@ -80,6 +101,102 @@ function IssueRow({ issue }: { issue: ComplianceIssue }) {
   );
 }
 
+function fieldText(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function ConflictTable({
+  groups,
+  picked,
+  onPick,
+  ready,
+  repairing,
+  onRepair,
+}: {
+  groups: ConflictGroup[];
+  picked: Record<string, string>;
+  onPick: (groupId: string, candidateId: string) => void;
+  ready: boolean;
+  repairing: boolean;
+  onRepair: () => void;
+}) {
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="ui-card-head" style={{ borderBottom: "none", padding: "0 0 6px" }}>
+        <h3 style={{ fontSize: 14 }}>冲突的多份标识</h3>
+      </div>
+      <div style={{ fontSize: 13, color: "var(--text-600)", lineHeight: 1.7, marginBottom: 10 }}>
+        同一内容文件里有多份互相矛盾的隐式标识。点选要保留的一份后，再按所选标识修复；未选择时不会自动挑选，也不会新造制作编号。
+      </div>
+      {groups.map((group) => (
+        <div key={group.id} style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 13, marginBottom: 6, color: "var(--ink-900)" }}>
+            <strong>{group.file}</strong>
+            <span style={{ color: "var(--text-400)", marginLeft: 8 }}>
+              差异字段：{group.differing_fields.join("、") || "—"}
+            </span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="spec-table">
+              <thead>
+                <tr>
+                  <th>选用</th>
+                  <th>来源位置</th>
+                  {AIGC_FIELDS.map((name) => (
+                    <th
+                      key={name}
+                      style={group.differing_fields.includes(name) ? { background: "#f4ead2" } : undefined}
+                    >
+                      {name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {group.candidates.map((candidate) => (
+                  <tr key={candidate.id}>
+                    <td>
+                      <input
+                        type="radio"
+                        name={`conflict-${group.id}`}
+                        checked={picked[group.id] === candidate.id}
+                        aria-label={`${group.file} ${candidate.location}`}
+                        onChange={() => onPick(group.id, candidate.id)}
+                      />
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>{candidate.location}</td>
+                    {AIGC_FIELDS.map((name) => {
+                      const differs = candidate.differing_fields.includes(name);
+                      return (
+                        <td
+                          key={name}
+                          style={differs ? { background: "#f4ead2", fontWeight: 700, color: "var(--ink-900)" } : undefined}
+                        >
+                          {fieldText(candidate.fields[name])}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+      <button
+        className="btn-gold"
+        disabled={!ready || repairing}
+        onClick={onRepair}
+        style={{ opacity: !ready || repairing ? 0.6 : 1 }}
+      >
+        {repairing ? "正在按所选标识修复…" : "按所选标识修复"}
+      </button>
+    </div>
+  );
+}
+
 function CandidateRow({ cand }: { cand: ComplianceCandidate }) {
   return (
     <div
@@ -121,6 +238,7 @@ export default function MediaInspectPage() {
   const [report, setReport] = useState<ComplianceReport | null>(null);
   const [repairPlan, setRepairPlan] = useState<CompositeRepairPlan | null>(null);
   const [repairing, setRepairing] = useState(false);
+  const [picked, setPicked] = useState<Record<string, string>>({});
 
   useEffect(() => {
     getHealth()
@@ -135,6 +253,7 @@ export default function MediaInspectPage() {
     }
     setLoading(true);
     setReport(null);
+    setPicked({});
     try {
       setRepairPlan(null);
       setReport(await inspectMedia(file));
@@ -150,6 +269,79 @@ export default function MediaInspectPage() {
     setRepairing(true);
     try {
       setRepairPlan(await createCompositeRepairPlan(file));
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRepairing(false);
+    }
+  }
+
+  function pickCandidate(groupId: string, candidateId: string) {
+    setPicked((current) => ({ ...current, [groupId]: candidateId }));
+  }
+
+  async function saveAndRecheck(blob: Blob, name: string) {
+    if (!file) return;
+    const repaired = new File([blob], name, { type: file.type || blob.type });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = repaired.name;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setFile(repaired);
+    setRepairPlan(null);
+    setPicked({});
+    setReport(await inspectMedia(repaired));
+    message.success("已下载修复结果，并完成复检");
+  }
+
+  async function waitRepairJob(jobId: string): Promise<RepairJobResponse> {
+    for (let attempt = 0; attempt < 90; attempt += 1) {
+      const job = await getRepairJob(jobId);
+      if (job.status === "succeeded" || job.status === "failed") return job;
+      await new Promise((resolve) => window.setTimeout(resolve, 800));
+    }
+    throw new Error("修复任务超时");
+  }
+
+  async function repairSelected() {
+    if (!file || !report?.conflict_groups?.length) return;
+    const groups = report.conflict_groups;
+    const selection: Record<string, string> = {};
+    for (const group of groups) {
+      const candidateId = picked[group.id];
+      if (!candidateId) return;
+      selection[group.id] = candidateId;
+    }
+    const choice = groups.length === 1
+      ? { selected_candidate_id: selection[groups[0].id] }
+      : { selections: selection };
+    setRepairing(true);
+    try {
+      if (report.subject) {
+        const plan = await createCompositeRepairPlan(file, choice);
+        if (!plan.repair_plan.executable) {
+          message.error(plan.repair_plan.blocking_reasons.join("；") || "所选标识不能自动修复");
+          return;
+        }
+        const job = await confirmCompositeRepair(plan.plan_id, plan.plan_hash);
+        const output = await fetch(job.links.output);
+        if (!output.ok) throw new Error("无法下载修复结果");
+        await saveAndRecheck(await output.blob(), `repaired-${file.name}`);
+        return;
+      }
+      const plan = await createRepairPlan(file, choice);
+      if (!plan.repair_plan.executable) {
+        message.error(plan.repair_plan.blocking_reasons.join("；") || "所选标识不能自动修复");
+        return;
+      }
+      const accepted = await confirmRepairPlan(plan.plan_id, plan.plan_hash, "合规检测页");
+      const job = await waitRepairJob(accepted.job_id);
+      if (job.status !== "succeeded" || !job.output) {
+        throw new Error(job.error?.message || "修复失败");
+      }
+      await saveAndRecheck(await downloadRepairOutput(job.job_id), job.output.file_name);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -381,7 +573,18 @@ export default function MediaInspectPage() {
                       ))}
                     </div>
                   ) : null}
-                  {report.subject && report.repairability === "auto_fixable" && file ? (
+                  {report.conflict_groups && report.conflict_groups.length > 0 ? (
+                    <ConflictTable
+                      groups={report.conflict_groups}
+                      picked={picked}
+                      onPick={pickCandidate}
+                      ready={report.conflict_groups.every((group) => Boolean(picked[group.id]))}
+                      repairing={repairing}
+                      onRepair={() => void repairSelected()}
+                    />
+                  ) : null}
+                  {report.subject && report.repairability === "auto_fixable" && file
+                    && !(report.conflict_groups && report.conflict_groups.length > 0) ? (
                     <div style={{ marginTop: 12 }}>
                       <button className="btn-gold" disabled={repairing} onClick={() => void planRepair()}>
                         {repairing ? "正在处理…" : "生成修复方案"}

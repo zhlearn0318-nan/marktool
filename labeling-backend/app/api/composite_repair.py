@@ -19,6 +19,7 @@ from ..composite.compliance import (
     inspect_composite,
     plan_hash,
 )
+from ..core.conflict_groups import ConflictSelectionError
 from ..config import Settings
 from ..core.errors import FILE_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, ApiError
 from ..tools import tools_from_settings
@@ -32,6 +33,24 @@ def _root(settings: Settings) -> Path:
     path = Path(settings.storage.root) / "composite_repairs"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _read_selection(form) -> tuple[dict | None, str | None]:
+    raw = form.get("selections")
+    selected = form.get("selected_candidate_id")
+    if hasattr(raw, "read"):
+        raw = raw.file.read().decode("utf-8") if hasattr(raw, "file") else None
+    selections = None
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ApiError(400, "INVALID_SELECTION", "selections 必须是 JSON 对象") from exc
+        if not isinstance(parsed, dict):
+            raise ApiError(400, "INVALID_SELECTION", "selections 必须是 JSON 对象")
+        selections = {str(key): str(value) for key, value in parsed.items()}
+    candidate = str(selected).strip() if isinstance(selected, str) and selected.strip() else None
+    return selections, candidate
 
 
 def _read_json(path: Path) -> dict:
@@ -74,7 +93,13 @@ async def create_composite_repair_plan(
         request_id=getattr(http_request.state, "request_id", plan_id),
         tools=tools,
     )
-    plan = build_repair_plan(report)
+    selections, selected_candidate_id = _read_selection(form)
+    try:
+        plan = build_repair_plan(
+            report, selections=selections, selected_candidate_id=selected_candidate_id,
+        )
+    except ConflictSelectionError as exc:
+        raise ApiError(422, exc.code, exc.message) from exc
     digest_plan = plan_hash(digest, plan)
     record = {
         "plan_id": plan_id,

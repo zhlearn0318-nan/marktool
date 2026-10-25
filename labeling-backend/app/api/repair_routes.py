@@ -168,6 +168,8 @@ async def create_metadata_repair_plan(
             filename=file_part.filename,
             data=data,
             trusted_input=options.trusted_input,
+            selections=options.selections,
+            selected_candidate_id=options.selected_candidate_id,
         )
     except MetadataRepairRequestError as exc:
         return _problem(exc.status_code, request_id, exc.code, exc.message, exc.details)

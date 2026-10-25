@@ -15,7 +15,7 @@ AIGC 文件元数据标注、检测与修复平台。仓库包含 React 前端�
 
 修复需先生成计划、查看变更并确认执行；无法安全修复的文件会被拒绝或要求人工处理。原文件保留，结果另存为新文件。音视频写入不转码，通过 ffprobe 与短片段解码检查完整性；文档和图片使用各自的内容完整性校验。
 
-不带额外参数时，`metadata-label-jobs`、`compliance-inspect`、`metadata-repair-*` 与合并前的 main 一致。合规检测页会附带 `profile=auto`：能识别的多模态文件、结果包和场景包走同一份四档结论；识别不了的仍按单模态检测。多模态和场景的修复使用 `composite-repair-plans` / `composite-repair-jobs`，规则与单模态修复相同（相同的重复标识保留一份，损坏 JSON 和互相冲突的标识不自动挑选）。多模态页和场景页不再单独做校验，页面上的入口会转到合规检测。
+不带额外参数时，`metadata-label-jobs`、`compliance-inspect`、`metadata-repair-*` 与合并前的 main 一致。合规检测页会附带 `profile=auto`：能识别的多模态文件、结果包和场景包走同一份四档结论；识别不了的仍按单模态检测。多模态和场景的修复使用 `composite-repair-plans` / `composite-repair-jobs`。相同的重复标识保留一份，预留字段缺失和数值 Label 按原规则补齐；损坏 JSON 和缺少身份字段不自动修，也不会凭空生成 ProduceID。同一内容文件里互相矛盾的多份标识只报告、不自动挑选，由用户选定一份后再写回。多模态页和场景页不再单独做校验，页面上的入口会转到合规检测。
 
 ## 仓库结构
 
@@ -176,11 +176,20 @@ python -m app.cli scene interactive label \
 
 MP3 成分使用与单文件打标相同的 ID3 `TXXX:AIGC`，不再先转成 M4A。Markdown、PDF、HTML、DOCX 同样走各自已有载体。只有 `.txt`、`.vtt`、`.srt` 使用尾段。
 
-已有结果的复核在前端「合规检测」。接口是同一个 `POST /api/v1/compliance-inspect`，表单增加 `profile=auto`。可自动修复时，前端再调用：
+已有结果的复核在前端「合规检测」。接口是同一个 `POST /api/v1/compliance-inspect`，表单增加 `profile=auto`。报告里如果出现 `conflict_groups`，每一组是同一内容文件中互相矛盾的隐式标识：候选带稳定 `id`、来源位置（XMP、ID3、mp4 udta / QuickTime 注释、文本尾段、字幕轨或场景包内的文件）以及七个字段。差异字段列在 `differing_fields`。完全相同的重复不会进这个列表。
+
+不传选择时，修复计划保持原来的行为：可执行标志为假，阻塞原因写明不会任意选择。选定之后，其余冲突份被覆盖，再走预留字段补全和数值 Label 转换。单模态把选择放进 `POST /api/v1/metadata-repair-plans` 的 `request` JSON：
+
+- `selections`：对象，键是冲突组 `id`，值是候选 `id`。同一文件有多个冲突组时必须逐组给出。
+- `selected_candidate_id`：只有一个冲突组时可以只传这一个候选 `id`。
+
+多模态和场景包把同样的两个参数作为 `POST /api/v1/composite-repair-plans` 的表单字段，`selections` 是 JSON 对象字符串。未知组或未知候选返回 422 `INVALID_CANDIDATE_ID`；多组却只传 `selected_candidate_id`，或有组没选，返回 422 `SELECTION_REQUIRED`。
+
+前端「合规检测」在有冲突组时列出对比表，差异字段高亮。每一组都点选之后，「按所选标识修复」才可点。修复完成会下载结果并自动复检。没有冲突、但可以自动修复时，以及用户选定冲突标识之后，前端调用：
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| POST | `/api/v1/composite-repair-plans` | 为多模态或场景包生成修复方案 |
+| POST | `/api/v1/composite-repair-plans` | 为多模态或场景包生成修复方案；可选 `selections` 或 `selected_candidate_id` |
 | POST | `/api/v1/composite-repair-jobs` | 确认后执行，返回复检结论 |
 | GET | `/api/v1/composite-repair-jobs/{job_id}/output` | 下载修复后的文件 |
 

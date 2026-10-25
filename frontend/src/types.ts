@@ -123,6 +123,10 @@ export interface RepairPlanOptions {
     source_reference: string;
     write_context: RepairWriteContext;
   };
+  /** 冲突组 id → 候选 id。同一文件有多组时必须逐组给出。 */
+  selections?: Record<string, string>;
+  /** 只有一个冲突组时，可以只传选中的候选 id。 */
+  selected_candidate_id?: string;
 }
 
 export interface RepairFieldChange {
@@ -332,6 +336,25 @@ export interface ComplianceReport {
     record_count: number;
     issues: ComplianceIssue[];
   }[];
+  /** 内容互相矛盾的隐式标识。完全相同的重复不会出现在这里。 */
+  conflict_groups?: ConflictGroup[];
+}
+
+export interface ConflictCandidate {
+  id: string;
+  index: number;
+  tag: string;
+  location: string;
+  fields: Record<string, unknown>;
+  differing_fields: string[];
+}
+
+export interface ConflictGroup {
+  id: string;
+  file: string;
+  group_key: string;
+  differing_fields: string[];
+  candidates: ConflictCandidate[];
 }
 
 export interface CompositeRepairPlan {

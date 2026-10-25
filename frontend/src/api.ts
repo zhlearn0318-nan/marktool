@@ -60,11 +60,22 @@ export async function inspectMedia(file: File): Promise<ComplianceReport> {
   return res.json();
 }
 
-export async function createCompositeRepairPlan(file: File): Promise<import("./types").CompositeRepairPlan> {
+export async function createCompositeRepairPlan(
+  file: File,
+  selection?: { selections?: Record<string, string>; selected_candidate_id?: string },
+): Promise<import("./types").CompositeRepairPlan> {
   const form = new FormData();
   form.append("file", file);
+  if (selection?.selections) form.append("selections", JSON.stringify(selection.selections));
+  if (selection?.selected_candidate_id) {
+    form.append("selected_candidate_id", selection.selected_candidate_id);
+  }
   const res = await fetch("/api/v1/composite-repair-plans", { method: "POST", body: form });
-  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error?.message || "无法生成修复方案");
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const code = body?.error?.code ? `${body.error.code}: ` : "";
+    throw new Error(`${code}${body?.error?.message || "无法生成修复方案"}`);
+  }
   return res.json();
 }
 
@@ -147,7 +158,13 @@ export async function createRepairPlan(
 ): Promise<RepairPlanResponse> {
   const form = new FormData();
   form.append("file", file);
-  if (options?.trusted_input) form.append("request", JSON.stringify(options));
+  if (options && (options.trusted_input || options.selections || options.selected_candidate_id)) {
+    const payload: RepairPlanOptions = {};
+    if (options.trusted_input) payload.trusted_input = options.trusted_input;
+    if (options.selections) payload.selections = options.selections;
+    if (options.selected_candidate_id) payload.selected_candidate_id = options.selected_candidate_id;
+    form.append("request", JSON.stringify(payload));
+  }
   const res = await fetch("/api/v1/metadata-repair-plans", { method: "POST", body: form });
   if (!res.ok) throw await repairError(res, "生成修复计划失败");
   return res.json();

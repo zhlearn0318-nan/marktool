@@ -168,7 +168,8 @@ class MetadataComplianceInspector:
             confidence=classified["confidence"], registry=registry_block,
             file_name=file_name, size_bytes=size_bytes, sha256=sha256,
             request_id=request_id, elapsed_ms=int((time.monotonic() - started) * 1000))
-        return report
+        from .conflict_groups import attach_to_report
+        return attach_to_report(report, records)
 
     # ---- 分类 ----
     def _classify(self, records: list) -> dict:

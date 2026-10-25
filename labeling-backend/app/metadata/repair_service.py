@@ -406,6 +406,8 @@ class MetadataRepairService:
         filename: Optional[str],
         data: bytes,
         trusted_input: Optional[TrustedRepairInput] = None,
+        selections: Optional[dict[str, str]] = None,
+        selected_candidate_id: Optional[str] = None,
     ) -> dict[str, Any]:
         self._purge_expired()
         if not data:
@@ -445,6 +447,26 @@ class MetadataRepairService:
                 raise MetadataRepairRequestError(
                     422, getattr(exc, "code", "UNSUPPORTED_MEDIA_TYPE"), str(exc)
                 ) from exc
+            if trusted_input is None and (selections or selected_candidate_id):
+                from app.core.conflict_groups import (
+                    ConflictSelectionError,
+                    SINGLE_FILE_GROUP,
+                    build_conflict_groups,
+                    chosen_records,
+                    resolve_selection,
+                )
+                groups = build_conflict_groups(
+                    list(inspection.raw_records), group_key=SINGLE_FILE_GROUP,
+                    file_label=self._safe_name(filename),
+                )
+                try:
+                    resolved = resolve_selection(groups, selections, selected_candidate_id)
+                except ConflictSelectionError as exc:
+                    raise MetadataRepairRequestError(422, exc.code, exc.message) from exc
+                if resolved:
+                    inspection = inspection.model_copy(update={
+                        "raw_records": chosen_records(list(inspection.raw_records), groups, resolved),
+                    })
             try:
                 draft = RepairPlanner().plan(inspection, trusted_input)
             except RepairPlanningError as exc:

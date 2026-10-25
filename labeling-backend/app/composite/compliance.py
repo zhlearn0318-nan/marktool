@@ -134,7 +134,8 @@ def inspect_composite(
     )
 
 
-def build_repair_plan(report: dict) -> dict:
+def build_repair_plan(report: dict, selections: dict | None = None,
+                       selected_candidate_id: str | None = None) -> dict:
     """按单文件的 RepairPlanner 汇总整包修复方案。不修改文件。"""
     actions: list[str] = []
     blockers: list[str] = []
@@ -142,8 +143,15 @@ def build_repair_plan(report: dict) -> dict:
     changes: list[dict] = []
     units_out: list[dict] = []
     any_change = False
+    from ..core.conflict_groups import ConflictSelectionError, resolve_selection
+    try:
+        resolved = resolve_selection(
+            report.get("conflict_groups") or [], selections, selected_candidate_id,
+        )
+    except ConflictSelectionError:
+        raise
     for unit in report.get("units") or []:
-        draft_units, unit_actions, unit_blockers, unit_changes = _plan_unit(unit)
+        draft_units, unit_actions, unit_blockers, unit_changes = _plan_unit(unit, resolved)
         actions.extend(unit_actions)
         blockers.extend(unit_blockers)
         changes.extend(unit_changes)
@@ -560,14 +568,36 @@ def _planner(records: list[AIGCRecord], conclusion: str):
     return RepairPlanner(require_cross_reader=False).plan(inspection)
 
 
-def _plan_unit(unit: dict) -> tuple[dict, list[str], list[str], list[dict]]:
+def _plan_unit(unit: dict, resolved: dict | None = None) -> tuple[dict, list[str], list[str], list[dict]]:
+    from ..core.conflict_groups import build_conflict_groups, chosen_records
+    stored = list(unit.get("records") or [])
+    groups = build_conflict_groups(stored, group_key=unit["name"], file_label=unit["name"])
+    if groups and resolved and groups[0]["id"] in resolved:
+        stored = chosen_records(stored, groups, resolved)
     records = [
         AIGCRecord(
             tag_key=item["tag_key"], raw=item.get("raw") or "",
             aigc=item.get("aigc"), location=item.get("location"),
         )
-        for item in unit.get("records") or []
+        for item in stored
     ]
+    if groups and resolved and groups[0]["id"] in resolved:
+        draft = _planner(records, CONCLUSION_NONCOMPLIANT)
+        changes = [item.model_dump(mode="json") for item in draft.field_changes]
+        if not draft.executable or not draft.proposed_document:
+            return (
+                {"name": unit["name"], "role": unit.get("role"), "proposed": None},
+                [],
+                list(draft.blocking_reasons) or [f"{unit['name']} 不能按所选标识修复"],
+                changes,
+            )
+        actions = [f"{unit['name']}：按用户选择保留一份冲突标识"] + [
+            f"{unit['name']}：{action}" for action in draft.actions
+        ]
+        return (
+            {"name": unit["name"], "role": unit.get("role"), "proposed": draft.proposed_document},
+            actions, [], changes,
+        )
     if unit.get("conclusion") in {CONCLUSION_COMPLIANT, None} and unit.get("repairability") is None:
         return {"name": unit["name"], "role": unit.get("role"), "proposed": None}, [], [], []
     if unit.get("conclusion") == CONCLUSION_NOT_FOUND:
@@ -601,6 +631,18 @@ def _plan_unit(unit: dict) -> tuple[dict, list[str], list[str], list[dict]]:
         [],
         changes,
     )
+
+
+def _conflict_groups(units: list[dict]) -> list[dict]:
+    from ..core.conflict_groups import build_conflict_groups
+    groups: list[dict] = []
+    for unit in units:
+        groups.extend(build_conflict_groups(
+            list(unit.get("records") or []),
+            group_key=str(unit.get("name") or "file"),
+            file_label=str(unit.get("name") or "file"),
+        ))
+    return groups
 
 
 def _assemble(kind, units, explicit_issues, media, path, *, file_name, size_bytes, sha256,
@@ -702,6 +744,7 @@ def _assemble(kind, units, explicit_issues, media, path, *, file_name, size_byte
             },
             "units": public_units,
             "explicit_issues": [issue.to_dict() for issue in explicit_issues],
+            "conflict_groups": _conflict_groups(units),
         },
     )
     return report

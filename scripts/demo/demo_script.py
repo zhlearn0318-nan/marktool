@@ -7,7 +7,8 @@
 
 脚本使用 Playwright 在 1280×800 录屏，并在页面顶部放中文字幕。结束后用 ffmpeg
 转成 H.264 MP4。合规检测一段会上传正常的多模态 MP4、带重复标识的多模态 MP4、
-虚拟场景包和交互场景包；只对有问题的文件执行修复并复检。
+内容互相冲突的多模态 MP4、虚拟场景包和交互场景包。重复标识自动合并；冲突标识
+先对比候选，选中一份后再修复并复检。冲突样本写到 ``<out>/work/multimodal-conflict.mp4``。
 """
 from __future__ import annotations
 
@@ -119,13 +120,29 @@ def member(package: Path, suffix: str) -> Path:
     return target
 
 
-def duplicate_comment(source: Path, dest: Path) -> None:
-    shutil.copyfile(source, dest)
-    raw = subprocess.check_output([
+def _xmp_aigc(path: Path) -> str:
+    return subprocess.check_output([
         "exiftool", "-config",
         str(Path(__file__).resolve().parents[2] / "labeling-backend/config/exiftool_aigc.config"),
-        "-s3", "-XMP-aigc:AIGC", str(dest),
+        "-s3", "-XMP-aigc:AIGC", str(path),
     ], text=True).strip()
+
+
+def duplicate_comment(source: Path, dest: Path) -> None:
+    shutil.copyfile(source, dest)
+    subprocess.check_call([
+        "exiftool", "-overwrite_original", "-QuickTime:Comment=" + _xmp_aigc(dest), str(dest),
+    ], stdout=subprocess.DEVNULL)
+
+
+def conflict_comment(source: Path, dest: Path) -> None:
+    """在容器注释里再写一份 ProduceID 不同的标识，形成需要用户选择的冲突。"""
+    shutil.copyfile(source, dest)
+    payload = json.loads(_xmp_aigc(dest))
+    inner = payload["AIGC"]
+    inner["ProduceID"] = "PID-CONFLICT-DROP"
+    inner["PropagateID"] = "PID-CONFLICT-DROP"
+    raw = json.dumps({"AIGC": inner}, ensure_ascii=True, separators=(",", ":"))
     subprocess.check_call([
         "exiftool", "-overwrite_original", "-QuickTime:Comment=" + raw, str(dest),
     ], stdout=subprocess.DEVNULL)
@@ -202,6 +219,22 @@ def main() -> None:
         page.get_by_text("合规", exact=False).first.wait_for(timeout=30000)
         caption(page, "修复后的文件已下载，复检结论为合规", 2.2)
         results["repaired"] = True
+
+        conflict_mp4 = WORK / "multimodal-conflict.mp4"
+        conflict_comment(good_mp4, conflict_mp4)
+        inspect(conflict_mp4, "合规检测：同一文件里两份标识内容互相冲突")
+        scroll_to(page, page.get_by_text("冲突的多份标识"))
+        caption(page, "差异字段已高亮。选择要保留的那一份", 1.8)
+        page.get_by_role("radio").first.click()
+        pause(0.8)
+        scroll_to(page, page.get_by_role("button", name="按所选标识修复"))
+        caption(page, "选定后按所选标识修复，其余冲突份会被覆盖", 1.6)
+        with page.expect_response(lambda item: "/composite-repair-jobs" in item.url, timeout=180000):
+            page.get_by_role("button", name="按所选标识修复").click()
+        page.locator(".ant-alert-success").wait_for(timeout=60000)
+        caption(page, "已按所选标识修复，复检结论为合规", 2.2)
+        results["conflict_sample"] = str(conflict_mp4)
+
         inspect(virtual_zip, "合规检测：虚拟场景包，同时检查显式提示")
         inspect(interactive_zip, "合规检测：交互场景包")
         caption(page, "场景包写入结果为合规；有问题的多模态文件已修复", 2.4)
