@@ -5,8 +5,10 @@ import PageBanner from "../components/PageBanner";
 import ToolSteps from "../components/ToolSteps";
 import {
   confirmCompositeRepair,
+  confirmExplicitPreview,
   confirmRepairPlan,
   createCompositeRepairPlan,
+  createExplicitPreview,
   createRepairPlan,
   downloadRepairOutput,
   getHealth,
@@ -21,6 +23,7 @@ import type {
   ComplianceReport,
   CompositeRepairPlan,
   ConflictGroup,
+  ExplicitPreview,
   RepairJobResponse,
 } from "../types";
 
@@ -197,6 +200,61 @@ function ConflictTable({
   );
 }
 
+function ExplicitPreviewPanel({
+  preview,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  preview: ExplicitPreview;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 13, color: "var(--text-600)", lineHeight: 1.7 }}>{preview.notice}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+        <figure style={{ margin: 0 }}>
+          <img alt="原图" src={preview.before_url} style={{ width: "100%", border: "1px solid var(--hairline)", borderRadius: 8 }} />
+          <figcaption style={{ fontSize: 12, color: "var(--text-400)", marginTop: 4 }}>原图</figcaption>
+        </figure>
+        <figure style={{ margin: 0 }}>
+          <img alt="修复后的预览" src={preview.after_url} style={{ width: "100%", border: "1px solid var(--hairline)", borderRadius: 8 }} />
+          <figcaption style={{ fontSize: 12, color: "var(--text-400)", marginTop: 4 }}>修复后</figcaption>
+        </figure>
+      </div>
+      <div style={{ fontSize: 13, color: "var(--text-600)", lineHeight: 1.7, marginTop: 8 }}>{preview.position_rationale}</div>
+      <div style={{ overflowX: "auto", marginTop: 8 }}>
+        <table className="spec-table">
+          <thead>
+            <tr>
+              <th>文件</th>
+              <th>字段</th>
+              <th>改动</th>
+            </tr>
+          </thead>
+          <tbody>
+            {preview.changes.map((change) => (
+              <tr key={`${change.file}-${change.field}`}>
+                <td>{change.file}</td>
+                <td>{change.field}</td>
+                <td>{change.action}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button className="btn-gold" disabled={busy} onClick={onConfirm} style={{ opacity: busy ? 0.6 : 1 }}>
+          {busy ? "正在按预览修复…" : "确认并修复"}
+        </button>
+        <button className="btn-ghost-dark" disabled={busy} onClick={onCancel}>取消</button>
+      </div>
+    </div>
+  );
+}
+
 function CandidateRow({ cand }: { cand: ComplianceCandidate }) {
   return (
     <div
@@ -239,6 +297,8 @@ export default function MediaInspectPage() {
   const [repairPlan, setRepairPlan] = useState<CompositeRepairPlan | null>(null);
   const [repairing, setRepairing] = useState(false);
   const [picked, setPicked] = useState<Record<string, string>>({});
+  const [explicitPreview, setExplicitPreview] = useState<ExplicitPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   useEffect(() => {
     getHealth()
@@ -254,6 +314,7 @@ export default function MediaInspectPage() {
     setLoading(true);
     setReport(null);
     setPicked({});
+    setExplicitPreview(null);
     try {
       setRepairPlan(null);
       setReport(await inspectMedia(file));
@@ -292,6 +353,7 @@ export default function MediaInspectPage() {
     setFile(repaired);
     setRepairPlan(null);
     setPicked({});
+    setExplicitPreview(null);
     setReport(await inspectMedia(repaired));
     message.success("已下载修复结果，并完成复检");
   }
@@ -342,6 +404,33 @@ export default function MediaInspectPage() {
         throw new Error(job.error?.message || "修复失败");
       }
       await saveAndRecheck(await downloadRepairOutput(job.job_id), job.output.file_name);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRepairing(false);
+    }
+  }
+
+  async function generatePreview() {
+    if (!file) return;
+    setPreviewing(true);
+    try {
+      setExplicitPreview(await createExplicitPreview(file));
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function confirmPreview() {
+    if (!explicitPreview) return;
+    setRepairing(true);
+    try {
+      const job = await confirmExplicitPreview(explicitPreview.preview_id);
+      const output = await fetch(job.links.output);
+      if (!output.ok) throw new Error("无法下载修复结果");
+      await saveAndRecheck(await output.blob(), `repaired-${file?.name || "scene.zip"}`);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -429,6 +518,8 @@ export default function MediaInspectPage() {
                 beforeUpload={(f) => {
                   setFile(f);
                   setReport(null);
+                  setExplicitPreview(null);
+                  setPicked({});
                   return false;
                 }}
                 showUploadList={false}
@@ -571,6 +662,24 @@ export default function MediaInspectPage() {
                           · {unit.record_count} 份隐式标识
                         </div>
                       ))}
+                    </div>
+                  ) : null}
+                  {report.explicit_preview?.available ? (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 13, color: "var(--text-600)", lineHeight: 1.7, marginBottom: 8 }}>
+                        场景显式提示不合格。先看修复预览，确认后才写入。这一步和隐式标识的冲突选择分开处理。
+                      </div>
+                      <button className="btn-gold" disabled={previewing || repairing} onClick={() => void generatePreview()}>
+                        {previewing ? "正在生成预览…" : "生成修复预览"}
+                      </button>
+                      {explicitPreview ? (
+                        <ExplicitPreviewPanel
+                          preview={explicitPreview}
+                          busy={repairing}
+                          onConfirm={() => void confirmPreview()}
+                          onCancel={() => setExplicitPreview(null)}
+                        />
+                      ) : null}
                     </div>
                   ) : null}
                   {report.conflict_groups && report.conflict_groups.length > 0 ? (

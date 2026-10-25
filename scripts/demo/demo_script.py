@@ -8,7 +8,9 @@
 脚本使用 Playwright 在 1280×800 录屏，并在页面顶部放中文字幕。结束后用 ffmpeg
 转成 H.264 MP4。合规检测一段会上传正常的多模态 MP4、带重复标识的多模态 MP4、
 内容互相冲突的多模态 MP4、虚拟场景包和交互场景包。重复标识自动合并；冲突标识
-先对比候选，选中一份后再修复并复检。冲突样本写到 ``<out>/work/multimodal-conflict.mp4``。
+先对比候选，选中一份后再修复并复检。显式提示不合格的虚拟场景包先出左右对比预览，
+确认后才修复。冲突样本写到 ``<out>/work/multimodal-conflict.mp4``，不合格场景包写到
+``<out>/work/virtual-explicit-broken.zip``。
 """
 from __future__ import annotations
 
@@ -148,6 +150,19 @@ def conflict_comment(source: Path, dest: Path) -> None:
     ], stdout=subprocess.DEVNULL)
 
 
+def degrade_virtual(source: Path, dest: Path) -> None:
+    """把已合规的虚拟场景包改成显式文字和位置都不合格，像素里的原提示保留。"""
+    with zipfile.ZipFile(source) as archive:
+        members = {name: archive.read(name) for name in archive.namelist() if not name.endswith("/")}
+    descriptor = json.loads(members["scene.json"])
+    descriptor["explicit"]["text"] = "未按标准提示"
+    descriptor["explicit"]["position"] = "center"
+    members["scene.json"] = json.dumps(descriptor, ensure_ascii=False, indent=2).encode("utf-8")
+    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in members.items():
+            archive.writestr(name, data)
+
+
 def main() -> None:
     video, reply = ensure_assets()
     results: dict[str, object] = {}
@@ -236,6 +251,21 @@ def main() -> None:
         results["conflict_sample"] = str(conflict_mp4)
 
         inspect(virtual_zip, "合规检测：虚拟场景包，同时检查显式提示")
+        broken_virtual = WORK / "virtual-explicit-broken.zip"
+        degrade_virtual(virtual_zip, broken_virtual)
+        inspect(broken_virtual, "合规检测：虚拟场景显式提示不合格")
+        scroll_to(page, page.get_by_role("button", name="生成修复预览"))
+        with page.expect_response(lambda item: "/scene-explicit-previews" in item.url and item.request.method == "POST", timeout=180000):
+            page.get_by_role("button", name="生成修复预览").click()
+        page.get_by_text("修复后").wait_for(timeout=30000)
+        scroll_to(page, page.get_by_role("img", name="修复后的预览"))
+        caption(page, "左右对比预览。原提示保留，新提示叠在更不遮挡的位置", 2.0)
+        scroll_to(page, page.get_by_role("button", name="确认并修复"))
+        with page.expect_response(lambda item: "/composite-repair-jobs" in item.url, timeout=180000):
+            page.get_by_role("button", name="确认并修复").click()
+        page.locator(".ant-alert-success").wait_for(timeout=60000)
+        caption(page, "确认预览后已写回，复检结论为合规", 2.2)
+        results["explicit_preview_sample"] = str(broken_virtual)
         inspect(interactive_zip, "合规检测：交互场景包")
         caption(page, "场景包写入结果为合规；有问题的多模态文件已修复", 2.4)
 

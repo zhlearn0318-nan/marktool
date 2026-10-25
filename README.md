@@ -15,7 +15,7 @@ AIGC 文件元数据标注、检测与修复平台。仓库包含 React 前端�
 
 修复需先生成计划、查看变更并确认执行；无法安全修复的文件会被拒绝或要求人工处理。原文件保留，结果另存为新文件。音视频写入不转码，通过 ffprobe 与短片段解码检查完整性；文档和图片使用各自的内容完整性校验。
 
-不带额外参数时，`metadata-label-jobs`、`compliance-inspect`、`metadata-repair-*` 与合并前的 main 一致。合规检测页会附带 `profile=auto`：能识别的多模态文件、结果包和场景包走同一份四档结论；识别不了的仍按单模态检测。多模态和场景的修复使用 `composite-repair-plans` / `composite-repair-jobs`。相同的重复标识保留一份，预留字段缺失和数值 Label 按原规则补齐；损坏 JSON 和缺少身份字段不自动修，也不会凭空生成 ProduceID。同一内容文件里互相矛盾的多份标识只报告、不自动挑选，由用户选定一份后再写回。多模态页和场景页不再单独做校验，页面上的入口会转到合规检测。
+不带额外参数时，`metadata-label-jobs`、`compliance-inspect`、`metadata-repair-*` 与合并前的 main 一致。合规检测页会附带 `profile=auto`：能识别的多模态文件、结果包和场景包走同一份四档结论；识别不了的仍按单模态检测。多模态和场景的修复使用 `composite-repair-plans` / `composite-repair-jobs`。相同的重复标识保留一份，预留字段缺失和数值 Label 按原规则补齐；损坏 JSON 和缺少身份字段不自动修，也不会凭空生成 ProduceID。同一内容文件里互相矛盾的多份标识只报告、不自动挑选，由用户选定一份后再写回。虚拟场景和交互场景的显式提示不合格时，先生成修复预览，确认后才在原画面上另叠一条合规提示，原来的提示保留。多模态页和场景页不再单独做校验，页面上的入口会转到合规检测。
 
 ## 仓库结构
 
@@ -192,6 +192,12 @@ MP3 成分使用与单文件打标相同的 ID3 `TXXX:AIGC`，不再先转成 M4
 | POST | `/api/v1/composite-repair-plans` | 为多模态或场景包生成修复方案；可选 `selections` 或 `selected_candidate_id` |
 | POST | `/api/v1/composite-repair-jobs` | 确认后执行，返回复检结论 |
 | GET | `/api/v1/composite-repair-jobs/{job_id}/output` | 下载修复后的文件 |
+
+场景显式提示和隐式冲突分开处理。两块可以同时出现在合规检测页上，各自确认、各自写回、各自复检。
+
+显式提示不合格时，`POST /api/v1/scene-explicit-previews` 上传场景包，返回预览 id、原图和修复后的图、位置选择依据和改动清单。这一步不写回。预览 id 形如 `expv_` 加 20 位十六进制，同一文件和同一套改动保持不变，24 小时内有效。确认写入时，`POST /api/v1/composite-repair-jobs` 的 JSON 带 `confirm_preview_id` 和 `confirmed: true`，不要同时带 `plan_id`。不带这个 id 时，显式问题仍只出现在报告和不可执行的方案里。未知 id 返回 422 `INVALID_PREVIEW_ID`，过期返回 422 `PREVIEW_EXPIRED`。
+
+新提示的文字、位置、字号、占比和对比度按第 5.5 / 5.6 条生成，绘制复用场景打标的叠加。原位置会挡住原提示或较丰富的画面时，改到边、角或界面允许位置里最不遮挡的一处，并在预览里写明依据。原来的不合格提示不删除：虚拟场景留在起始画面像素里，交互场景留在 `scene.json` 的 `previous_explicit`。
 
 演示录屏脚本在 `scripts/demo/demo_script.py`，说明见 `scripts/demo/README.md`。
 

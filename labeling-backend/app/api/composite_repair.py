@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import threading
 import uuid
 from pathlib import Path
@@ -20,6 +21,8 @@ from ..composite.compliance import (
     plan_hash,
 )
 from ..core.conflict_groups import ConflictSelectionError
+from ..labeling_error import LabelingError
+from ..scenes.explicit_preview import ExplicitPreviewError, build_explicit_preview, load_preview, save_preview
 from ..config import Settings
 from ..core.errors import FILE_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, ApiError
 from ..tools import tools_from_settings
@@ -31,6 +34,12 @@ _lock = threading.Lock()
 
 def _root(settings: Settings) -> Path:
     path = Path(settings.storage.root) / "composite_repairs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _preview_root(settings: Settings) -> Path:
+    path = _root(settings) / "explicit_previews"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -120,12 +129,70 @@ async def create_composite_repair_plan(
     })
 
 
+@router.post("/scene-explicit-previews", status_code=201)
+async def create_scene_explicit_preview(
+    http_request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """生成场景显式提示的修复预览。不写回场景包。"""
+    form = await http_request.form()
+    upload = form.get("file")
+    if not isinstance(upload, UploadFile):
+        raise ApiError(400, "INVALID_MULTIPART", "multipart 请求必须包含 file")
+    data = await upload.read()
+    if not data:
+        raise ApiError(400, "EMPTY_FILE", "上传文件不能为空")
+    if len(data) > settings.storage.max_file_bytes:
+        raise ApiError(413, FILE_TOO_LARGE, "文件超过大小上限。")
+    root = _preview_root(settings)
+    stored = root / "_incoming" / f"{uuid.uuid4().hex}.zip"
+    stored.parent.mkdir(parents=True, exist_ok=True)
+    stored.write_bytes(data)
+    tools = tools_from_settings(settings)
+    try:
+        try:
+            built = await run_in_threadpool(build_explicit_preview, stored, tools)
+        except ExplicitPreviewError as exc:
+            raise ApiError(422, exc.code, exc.message) from exc
+        except LabelingError as exc:
+            raise ApiError(422, exc.code, exc.message) from exc
+    finally:
+        stored.unlink(missing_ok=True)
+    record = save_preview(root, built, file_name=upload.filename or "scene.zip")
+    return JSONResponse(status_code=201, content=record)
+
+
+@router.get("/scene-explicit-previews/{preview_id}/{side}")
+async def get_scene_explicit_preview_image(
+    preview_id: str,
+    side: str,
+    settings: Settings = Depends(get_settings),
+):
+    if side not in {"before", "after"}:
+        raise ApiError(404, "PREVIEW_NOT_FOUND", "预览图片不存在。")
+    try:
+        load_preview(_preview_root(settings), preview_id)
+    except ExplicitPreviewError as exc:
+        raise ApiError(422, exc.code, exc.message) from exc
+    path = _preview_root(settings) / preview_id / f"{side}.png"
+    if not path.is_file():
+        raise ApiError(422, "INVALID_PREVIEW_ID", "预览不存在。")
+    return FileResponse(path, media_type="image/png")
+
+
 @router.post("/composite-repair-jobs", status_code=201)
 async def create_composite_repair_job(
     http_request: Request,
     settings: Settings = Depends(get_settings),
 ):
     body = await http_request.json()
+    preview_id = str(body.get("confirm_preview_id") or "").strip()
+    if preview_id:
+        if body.get("plan_id"):
+            raise ApiError(422, "PREVIEW_CONFIRM_SEPARATE", "显式提示预览与隐式标识修复请分开确认。")
+        if body.get("confirmed") is not True:
+            raise ApiError(400, "CONFIRMATION_REQUIRED", "执行修复前需要明确确认。")
+        return await _apply_explicit_preview(preview_id, settings, http_request)
     plan_id = str(body.get("plan_id") or "")
     submitted = str(body.get("plan_hash") or "")
     if body.get("confirmed") is not True:
@@ -172,6 +239,56 @@ async def create_composite_repair_job(
     return JSONResponse(status_code=201, content={
         "job_id": job_id,
         "plan_id": plan_id,
+        "status": job["status"],
+        "stage": job["stage"],
+        "progress": 100,
+        "validation": job["validation"],
+        "links": {"output": f"/api/v1/composite-repair-jobs/{job_id}/output"},
+    })
+
+
+async def _apply_explicit_preview(preview_id: str, settings: Settings, http_request: Request):
+    root = _root(settings)
+    try:
+        record = load_preview(_preview_root(settings), preview_id)
+    except ExplicitPreviewError as exc:
+        raise ApiError(422, exc.code, exc.message) from exc
+    job_id = f"cjob_{uuid.uuid4().hex}"
+    output = root / "outputs" / f"{job_id}.zip"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tools = tools_from_settings(settings)
+
+    def _run() -> dict:
+        shutil.copyfile(record["proposed_path"], output)
+        data = output.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        return inspect_composite(
+            output, file_name=record.get("file_name") or output.name,
+            size_bytes=len(data), sha256=digest,
+            request_id=getattr(http_request.state, "request_id", job_id),
+            tools=tools,
+        )
+
+    with _lock:
+        report = await run_in_threadpool(_run)
+    passed = report.get("conclusion") == "compliant"
+    job = {
+        "job_id": job_id,
+        "plan_id": None,
+        "preview_id": preview_id,
+        "status": "succeeded" if passed else "failed",
+        "stage": "completed" if passed else "failed",
+        "progress": 100,
+        "output_name": record.get("file_name") or output.name,
+        "output_path": str(output),
+        "validation": {"post_repair_conclusion": report.get("conclusion")},
+        "inspection": report,
+    }
+    _write_json(root / "jobs" / f"{job_id}.json", job)
+    return JSONResponse(status_code=201, content={
+        "job_id": job_id,
+        "plan_id": None,
+        "preview_id": preview_id,
         "status": job["status"],
         "stage": job["stage"],
         "progress": 100,

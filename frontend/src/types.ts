@@ -338,6 +338,11 @@ export interface ComplianceReport {
   }[];
   /** 内容互相矛盾的隐式标识。完全相同的重复不会出现在这里。 */
   conflict_groups?: ConflictGroup[];
+  /** 虚拟场景或交互场景的显式提示能否先出预览。 */
+  explicit_preview?: {
+    available: boolean;
+    reason?: string;
+  };
 }
 
 export interface ConflictCandidate {
@@ -355,6 +360,25 @@ export interface ConflictGroup {
   group_key: string;
   differing_fields: string[];
   candidates: ConflictCandidate[];
+}
+
+export interface ExplicitChange {
+  file: string;
+  field: string;
+  before?: unknown;
+  after?: unknown;
+  action: string;
+}
+
+export interface ExplicitPreview {
+  preview_id: string;
+  expires_at: string;
+  kind: string;
+  notice: string;
+  position_rationale: string;
+  changes: ExplicitChange[];
+  before_url: string;
+  after_url: string;
 }
 
 export interface CompositeRepairPlan {

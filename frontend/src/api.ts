@@ -79,6 +79,35 @@ export async function createCompositeRepairPlan(
   return res.json();
 }
 
+export async function createExplicitPreview(file: File): Promise<import("./types").ExplicitPreview> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/v1/scene-explicit-previews", { method: "POST", body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const code = body?.error?.code ? `${body.error.code}: ` : "";
+    throw new Error(`${code}${body?.error?.message || "无法生成修复预览"}`);
+  }
+  return res.json();
+}
+
+export async function confirmExplicitPreview(previewId: string): Promise<{
+  validation?: { post_repair_conclusion?: string };
+  links: { output: string };
+}> {
+  const res = await fetch("/api/v1/composite-repair-jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm_preview_id: previewId, confirmed: true, operator_label: "合规检测页" }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const code = body?.error?.code ? `${body.error.code}: ` : "";
+    throw new Error(`${code}${body?.error?.message || "确认预览失败"}`);
+  }
+  return res.json();
+}
+
 export async function confirmCompositeRepair(planId: string, planHash: string): Promise<{
   validation?: { post_repair_conclusion?: string };
   links: { output: string };

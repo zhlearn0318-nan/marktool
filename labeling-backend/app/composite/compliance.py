@@ -9,9 +9,8 @@
 能不能修。重复且内容一致才保留一份；JSON 损坏、身份字段缺失、多份内容
 互相冲突，都不自动挑选。ProduceID 只沿用文件里已经能确定的值，不新造。
 
-场景包比单模态多出来的显式标识（第 5.5 / 5.6 条）只做诊断。像素与
-``scene.json`` 对不上时不自动重绘：没有未标注的底图，重绘会把提示叠上去。
-这一条记在交接文档的待确认问题里。
+场景包的显式标识（第 5.5 / 5.6 条）先生成预览，用户确认预览 id 之后才写回。
+不带预览 id 时仍只报告。新提示叠在原画面上，原来的不合格提示不擦掉。
 """
 from __future__ import annotations
 
@@ -160,6 +159,8 @@ def build_repair_plan(report: dict, selections: dict | None = None,
         units_out.append(draft_units)
     for issue in report.get("explicit_issues") or []:
         blockers.append(issue["message"])
+    if any(issue.get("severity") == "error" for issue in report.get("explicit_issues") or []):
+        blockers.append("显式提示需先生成修复预览，确认后才写回。")
     strip_subtitle = bool(report.get("subject", {}).get("strip_subtitle"))
     if strip_subtitle and not blockers:
         actions.append("去掉字幕轨里的隐式标识，只保留容器上的一份")
@@ -645,6 +646,23 @@ def _conflict_groups(units: list[dict]) -> list[dict]:
     return groups
 
 
+_REPAIRABLE_EXPLICIT = {
+    "EXPLICIT_ELEMENTS", "EXPLICIT_POSITION", "EXPLICIT_SIZE", "EXPLICIT_PIXELS",
+    "EXPLICIT_PERSISTENT", "EXPLICIT_CONTRAST",
+}
+
+
+def _explicit_preview_hint(kind: str, explicit_issues: list[Issue]) -> dict:
+    if kind not in {"virtual-scene", "interactive-scene"}:
+        return {"available": False}
+    codes = {issue.code for issue in explicit_issues if issue.severity == "error"}
+    if "UNREADABLE_CARRIER" in codes:
+        return {"available": False, "reason": "起始画面或显式标识无法读取，不能生成预览"}
+    if not codes & _REPAIRABLE_EXPLICIT:
+        return {"available": False}
+    return {"available": True}
+
+
 def _assemble(kind, units, explicit_issues, media, path, *, file_name, size_bytes, sha256,
               request_id, tools, elapsed_ms) -> dict:
     conclusions = [unit["conclusion"] for unit in units]
@@ -745,6 +763,7 @@ def _assemble(kind, units, explicit_issues, media, path, *, file_name, size_byte
             "units": public_units,
             "explicit_issues": [issue.to_dict() for issue in explicit_issues],
             "conflict_groups": _conflict_groups(units),
+            "explicit_preview": _explicit_preview_hint(kind, explicit_issues),
         },
     )
     return report
