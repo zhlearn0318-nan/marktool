@@ -11,6 +11,10 @@ class RepairPlanOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trusted_input: Optional[TrustedRepairInput] = None
+    # 冲突组 id -> 候选 id。不传时，内容互相矛盾的多份标识仍不自动挑选。
+    selections: Optional[dict[str, str]] = None
+    # 只有一个冲突组时，可以只传这一份候选的 id。
+    selected_candidate_id: Optional[str] = None
 
 
 class RepairConfirmationRequest(BaseModel):

@@ -42,7 +42,8 @@ class Settings:
         "image/jpeg": True, "image/png": True, "video/mp4": True,
         "audio/mp4": True, "audio/mpeg": True,
         "text/markdown": True, "application/pdf": True, "text/html": True,
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": True})
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": True,
+        "multimodal": True, "scene/virtual": True, "scene/interactive": True})
 
 
 def load_settings(yaml_path: str | Path | None = None) -> Settings:

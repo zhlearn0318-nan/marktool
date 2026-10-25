@@ -3,14 +3,39 @@ import { Alert, Collapse, Tag, Upload, message } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
 import ToolSteps from "../components/ToolSteps";
-import { getHealth, inspectMedia } from "../api";
+import {
+  confirmCompositeRepair,
+  confirmExplicitPreview,
+  confirmRepairPlan,
+  createCompositeRepairPlan,
+  createExplicitPreview,
+  createRepairPlan,
+  downloadRepairOutput,
+  getHealth,
+  getRepairJob,
+  inspectMedia,
+} from "../api";
 import { C2PA_ZH, MEDIA_STATUS_ZH, REASON_ZH, REPAIR_ZH } from "../reasonCodes";
 import type {
   ComplianceCandidate,
   ComplianceConclusion,
   ComplianceIssue,
   ComplianceReport,
+  CompositeRepairPlan,
+  ConflictGroup,
+  ExplicitPreview,
+  RepairJobResponse,
 } from "../types";
+
+const AIGC_FIELDS = [
+  "Label",
+  "ContentProducer",
+  "ProduceID",
+  "ReservedCode1",
+  "ContentPropagator",
+  "PropagateID",
+  "ReservedCode2",
+] as const;
 
 const CONCLUSION_META: Record<
   ComplianceConclusion,
@@ -48,7 +73,7 @@ const SEVERITY_TAG: Record<string, "error" | "warning" | "default"> = {
 const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png", "text/markdown",
   "application/pdf", "text/html",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
-const ACCEPT = ".mp4,.jpg,.jpeg,.png,.md,.markdown,.pdf,.html,.htm,.docx";
+const ACCEPT = ".mp4,.jpg,.jpeg,.png,.md,.markdown,.pdf,.html,.htm,.docx,.zip";
 
 function chip(label: string, value: string | undefined | null, color?: string) {
   return value ? <Tag color={color}>{label}: {value}</Tag> : null;
@@ -74,6 +99,157 @@ function IssueRow({ issue }: { issue: ComplianceIssue }) {
         {issue.field ? (
           <div style={{ color: "var(--text-400)", fontSize: 12 }}>字段: {issue.field}</div>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+function fieldText(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function ConflictTable({
+  groups,
+  picked,
+  onPick,
+  ready,
+  repairing,
+  onRepair,
+}: {
+  groups: ConflictGroup[];
+  picked: Record<string, string>;
+  onPick: (groupId: string, candidateId: string) => void;
+  ready: boolean;
+  repairing: boolean;
+  onRepair: () => void;
+}) {
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="ui-card-head" style={{ borderBottom: "none", padding: "0 0 6px" }}>
+        <h3 style={{ fontSize: 14 }}>冲突的多份标识</h3>
+      </div>
+      <div style={{ fontSize: 13, color: "var(--text-600)", lineHeight: 1.7, marginBottom: 10 }}>
+        同一内容文件里有多份互相矛盾的隐式标识。点选要保留的一份后，再按所选标识修复；未选择时不会自动挑选，也不会新造制作编号。
+      </div>
+      {groups.map((group) => (
+        <div key={group.id} style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 13, marginBottom: 6, color: "var(--ink-900)" }}>
+            <strong>{group.file}</strong>
+            <span style={{ color: "var(--text-400)", marginLeft: 8 }}>
+              差异字段：{group.differing_fields.join("、") || "—"}
+            </span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="spec-table">
+              <thead>
+                <tr>
+                  <th>选用</th>
+                  <th>来源位置</th>
+                  {AIGC_FIELDS.map((name) => (
+                    <th
+                      key={name}
+                      style={group.differing_fields.includes(name) ? { background: "#f4ead2" } : undefined}
+                    >
+                      {name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {group.candidates.map((candidate) => (
+                  <tr key={candidate.id}>
+                    <td>
+                      <input
+                        type="radio"
+                        name={`conflict-${group.id}`}
+                        checked={picked[group.id] === candidate.id}
+                        aria-label={`${group.file} ${candidate.location}`}
+                        onChange={() => onPick(group.id, candidate.id)}
+                      />
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>{candidate.location}</td>
+                    {AIGC_FIELDS.map((name) => {
+                      const differs = candidate.differing_fields.includes(name);
+                      return (
+                        <td
+                          key={name}
+                          style={differs ? { background: "#f4ead2", fontWeight: 700, color: "var(--ink-900)" } : undefined}
+                        >
+                          {fieldText(candidate.fields[name])}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+      <button
+        className="btn-gold"
+        disabled={!ready || repairing}
+        onClick={onRepair}
+        style={{ opacity: !ready || repairing ? 0.6 : 1 }}
+      >
+        {repairing ? "正在按所选标识修复…" : "按所选标识修复"}
+      </button>
+    </div>
+  );
+}
+
+function ExplicitPreviewPanel({
+  preview,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  preview: ExplicitPreview;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 13, color: "var(--text-600)", lineHeight: 1.7 }}>{preview.notice}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+        <figure style={{ margin: 0 }}>
+          <img alt="原图" src={preview.before_url} style={{ width: "100%", border: "1px solid var(--hairline)", borderRadius: 8 }} />
+          <figcaption style={{ fontSize: 12, color: "var(--text-400)", marginTop: 4 }}>原图</figcaption>
+        </figure>
+        <figure style={{ margin: 0 }}>
+          <img alt="修复后的预览" src={preview.after_url} style={{ width: "100%", border: "1px solid var(--hairline)", borderRadius: 8 }} />
+          <figcaption style={{ fontSize: 12, color: "var(--text-400)", marginTop: 4 }}>修复后</figcaption>
+        </figure>
+      </div>
+      <div style={{ fontSize: 13, color: "var(--text-600)", lineHeight: 1.7, marginTop: 8 }}>{preview.position_rationale}</div>
+      <div style={{ overflowX: "auto", marginTop: 8 }}>
+        <table className="spec-table">
+          <thead>
+            <tr>
+              <th>文件</th>
+              <th>字段</th>
+              <th>改动</th>
+            </tr>
+          </thead>
+          <tbody>
+            {preview.changes.map((change) => (
+              <tr key={`${change.file}-${change.field}`}>
+                <td>{change.file}</td>
+                <td>{change.field}</td>
+                <td>{change.action}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button className="btn-gold" disabled={busy} onClick={onConfirm} style={{ opacity: busy ? 0.6 : 1 }}>
+          {busy ? "正在按预览修复…" : "确认并修复"}
+        </button>
+        <button className="btn-ghost-dark" disabled={busy} onClick={onCancel}>取消</button>
       </div>
     </div>
   );
@@ -118,6 +294,11 @@ export default function MediaInspectPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<ComplianceReport | null>(null);
+  const [repairPlan, setRepairPlan] = useState<CompositeRepairPlan | null>(null);
+  const [repairing, setRepairing] = useState(false);
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const [explicitPreview, setExplicitPreview] = useState<ExplicitPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   useEffect(() => {
     getHealth()
@@ -127,17 +308,159 @@ export default function MediaInspectPage() {
 
   async function submit() {
     if (!file) {
-      message.warning("请先选择待检测的文件（MP4 / JPEG / PNG / Markdown / PDF / HTML / DOCX）");
+      message.warning("请先选择待检测的文件");
       return;
     }
     setLoading(true);
     setReport(null);
+    setPicked({});
+    setExplicitPreview(null);
     try {
+      setRepairPlan(null);
       setReport(await inspectMedia(file));
     } catch (e) {
       message.error((e as Error).message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function planRepair() {
+    if (!file) return;
+    setRepairing(true);
+    try {
+      setRepairPlan(await createCompositeRepairPlan(file));
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRepairing(false);
+    }
+  }
+
+  function pickCandidate(groupId: string, candidateId: string) {
+    setPicked((current) => ({ ...current, [groupId]: candidateId }));
+  }
+
+  async function saveAndRecheck(blob: Blob, name: string) {
+    if (!file) return;
+    const repaired = new File([blob], name, { type: file.type || blob.type });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = repaired.name;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setFile(repaired);
+    setRepairPlan(null);
+    setPicked({});
+    setExplicitPreview(null);
+    setReport(await inspectMedia(repaired));
+    message.success("已下载修复结果，并完成复检");
+  }
+
+  async function waitRepairJob(jobId: string): Promise<RepairJobResponse> {
+    for (let attempt = 0; attempt < 90; attempt += 1) {
+      const job = await getRepairJob(jobId);
+      if (job.status === "succeeded" || job.status === "failed") return job;
+      await new Promise((resolve) => window.setTimeout(resolve, 800));
+    }
+    throw new Error("修复任务超时");
+  }
+
+  async function repairSelected() {
+    if (!file || !report?.conflict_groups?.length) return;
+    const groups = report.conflict_groups;
+    const selection: Record<string, string> = {};
+    for (const group of groups) {
+      const candidateId = picked[group.id];
+      if (!candidateId) return;
+      selection[group.id] = candidateId;
+    }
+    const choice = groups.length === 1
+      ? { selected_candidate_id: selection[groups[0].id] }
+      : { selections: selection };
+    setRepairing(true);
+    try {
+      if (report.subject) {
+        const plan = await createCompositeRepairPlan(file, choice);
+        if (!plan.repair_plan.executable) {
+          message.error(plan.repair_plan.blocking_reasons.join("；") || "所选标识不能自动修复");
+          return;
+        }
+        const job = await confirmCompositeRepair(plan.plan_id, plan.plan_hash);
+        const output = await fetch(job.links.output);
+        if (!output.ok) throw new Error("无法下载修复结果");
+        await saveAndRecheck(await output.blob(), `repaired-${file.name}`);
+        return;
+      }
+      const plan = await createRepairPlan(file, choice);
+      if (!plan.repair_plan.executable) {
+        message.error(plan.repair_plan.blocking_reasons.join("；") || "所选标识不能自动修复");
+        return;
+      }
+      const accepted = await confirmRepairPlan(plan.plan_id, plan.plan_hash, "合规检测页");
+      const job = await waitRepairJob(accepted.job_id);
+      if (job.status !== "succeeded" || !job.output) {
+        throw new Error(job.error?.message || "修复失败");
+      }
+      await saveAndRecheck(await downloadRepairOutput(job.job_id), job.output.file_name);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRepairing(false);
+    }
+  }
+
+  async function generatePreview() {
+    if (!file) return;
+    setPreviewing(true);
+    try {
+      setExplicitPreview(await createExplicitPreview(file));
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function confirmPreview() {
+    if (!explicitPreview) return;
+    setRepairing(true);
+    try {
+      const job = await confirmExplicitPreview(explicitPreview.preview_id);
+      const output = await fetch(job.links.output);
+      if (!output.ok) throw new Error("无法下载修复结果");
+      await saveAndRecheck(await output.blob(), `repaired-${file?.name || "scene.zip"}`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRepairing(false);
+    }
+  }
+
+  async function runRepair() {
+    if (!file || !repairPlan) return;
+    setRepairing(true);
+    try {
+      const job = await confirmCompositeRepair(repairPlan.plan_id, repairPlan.plan_hash);
+      const output = await fetch(job.links.output);
+      if (!output.ok) throw new Error("无法下载修复结果");
+      const blob = await output.blob();
+      const repaired = new File([blob], `repaired-${file.name}`, { type: file.type });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = repaired.name;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setFile(repaired);
+      setRepairPlan(null);
+      setReport(await inspectMedia(repaired));
+      message.success("已下载修复结果，并完成复检");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRepairing(false);
     }
   }
 
@@ -165,7 +488,7 @@ export default function MediaInspectPage() {
       <PageBanner
         eyebrow="COMPLIANCE · 图片 / 视频 / 文本"
         title="合规检测"
-        sub="检查图片、视频或文档中的 AIGC 标识，查看字段问题与处理建议。检测过程不会修改原文件。"
+        sub="检查单模态文件、多模态文件或结果包、虚拟场景包和交互场景包。自动识别类型，检测过程不修改原文件。"
       />
 
       <section className="section">
@@ -195,6 +518,8 @@ export default function MediaInspectPage() {
                 beforeUpload={(f) => {
                   setFile(f);
                   setReport(null);
+                  setExplicitPreview(null);
+                  setPicked({});
                   return false;
                 }}
                 showUploadList={false}
@@ -202,9 +527,9 @@ export default function MediaInspectPage() {
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽文件到此处（MP4 / JPEG / PNG / Markdown / PDF / HTML / DOCX）</p>
+                <p className="ant-upload-text">点击或拖拽文件到此处</p>
                 <p className="ant-upload-hint">
-                  单文件 · 按文件内容判定真实格式 · 只读检测不修改文件
+                  单模态文件、多模态 MP4 / 结果包、虚拟场景包或交互场景包。按内容识别，不修改原文件。
                 </p>
               </Upload.Dragger>
 
@@ -322,6 +647,73 @@ export default function MediaInspectPage() {
                       )}
                     </div>
                   )}
+
+                  {report.subject ? (
+                    <div style={{ marginTop: 12, fontSize: 13, color: "var(--text-600)" }}>
+                      识别为 <strong style={{ color: "var(--ink-900)" }}>{report.subject.label}</strong>
+                      。每个内容文件单独判断隐式标识；场景包同时检查显式提示。
+                    </div>
+                  ) : null}
+                  {report.units && report.units.length > 0 ? (
+                    <div style={{ marginTop: 10 }}>
+                      {report.units.map((unit) => (
+                        <div key={unit.name} style={{ fontSize: 13, padding: "4px 0", color: "var(--text-600)" }}>
+                          <strong>{unit.name}</strong> · {CONCLUSION_META[unit.conclusion]?.label ?? unit.conclusion}
+                          · {unit.record_count} 份隐式标识
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {report.explicit_preview?.available ? (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 13, color: "var(--text-600)", lineHeight: 1.7, marginBottom: 8 }}>
+                        场景显式提示不合格。先看修复预览，确认后才写入。这一步和隐式标识的冲突选择分开处理。
+                      </div>
+                      <button className="btn-gold" disabled={previewing || repairing} onClick={() => void generatePreview()}>
+                        {previewing ? "正在生成预览…" : "生成修复预览"}
+                      </button>
+                      {explicitPreview ? (
+                        <ExplicitPreviewPanel
+                          preview={explicitPreview}
+                          busy={repairing}
+                          onConfirm={() => void confirmPreview()}
+                          onCancel={() => setExplicitPreview(null)}
+                        />
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {report.conflict_groups && report.conflict_groups.length > 0 ? (
+                    <ConflictTable
+                      groups={report.conflict_groups}
+                      picked={picked}
+                      onPick={pickCandidate}
+                      ready={report.conflict_groups.every((group) => Boolean(picked[group.id]))}
+                      repairing={repairing}
+                      onRepair={() => void repairSelected()}
+                    />
+                  ) : null}
+                  {report.subject && report.repairability === "auto_fixable" && file
+                    && !(report.conflict_groups && report.conflict_groups.length > 0) ? (
+                    <div style={{ marginTop: 12 }}>
+                      <button className="btn-gold" disabled={repairing} onClick={() => void planRepair()}>
+                        {repairing ? "正在处理…" : "生成修复方案"}
+                      </button>
+                      {repairPlan ? (
+                        <div style={{ marginTop: 10, fontSize: 13, color: "var(--text-600)" }}>
+                          {repairPlan.repair_plan.executable
+                            ? repairPlan.repair_plan.actions.join("；")
+                            : repairPlan.repair_plan.blocking_reasons.join("；")}
+                          {repairPlan.repair_plan.executable ? (
+                            <div>
+                              <button className="btn-gold" style={{ marginTop: 8 }} disabled={repairing} onClick={() => void runRepair()}>
+                                确认执行并复检
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 8 }}>
                     {chip("置信度", report.confidence === "high" ? "高" : "低")}

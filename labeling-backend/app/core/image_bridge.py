@@ -147,7 +147,7 @@ def to_report(path: str, result: MetadataComplianceResult, *,
         "status": result.source_verification.status,
         "detail": "；".join(result.source_verification.details) or None,
     }
-    return {
+    report = {
         "request_id": request_id,
         "file_name": file_name,
         "detected_mime_type": result.mime_type,
@@ -177,6 +177,8 @@ def to_report(path: str, result: MetadataComplianceResult, *,
         # cross_reader / source_verification / extended_xmp 都在这里
         "metadata_compliance": result.model_dump(mode="json", exclude={"raw_records"}),
     }
+    from .conflict_groups import attach_to_report
+    return attach_to_report(report, list(result.raw_records))
 
 
 def read_existing_records(path) -> list:

@@ -53,6 +53,18 @@ export default function OverviewPage({
               view: "mediaRepair" as View,
               icon: "repair" as const,
             },
+            {
+              title: "拆分多模态",
+              text: "把视频拆成画面、音频和字幕，分别写入隐式标识，再校验重组结果。",
+              view: "multimodal" as View,
+              icon: "layers" as const,
+            },
+            {
+              title: "场景标识",
+              text: "为虚拟场景起始画面和交互界面写入可感知的文字提示。",
+              view: "scenes" as View,
+              icon: "video" as const,
+            },
           ].map((item) => (
             <button
               className="dashboard-tool"
@@ -103,6 +115,18 @@ export default function OverviewPage({
                 <td>可用（含回读校验）</td>
                 <td>尚未开放</td>
                 <td>尚未开放</td>
+              </tr>
+              <tr>
+                <td>多模态（画面、音频、字幕等）</td>
+                <td>可用（拆分、重组、按文件校验）</td>
+                <td>按成分文件校验</td>
+                <td>不走修复工作台</td>
+              </tr>
+              <tr>
+                <td>虚拟场景 / 交互场景</td>
+                <td>可用（显式提示 + 内容隐式标识）</td>
+                <td>按场景规则校验</td>
+                <td>不走修复工作台</td>
               </tr>
             </tbody>
           </table>

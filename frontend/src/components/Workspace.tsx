@@ -10,6 +10,8 @@ const groups: {
     items: [
       { view: "console", label: "工作台概览", icon: "grid" },
       { view: "labeling", label: "元数据标注", icon: "label" },
+      { view: "multimodal", label: "多模态", icon: "layers" },
+      { view: "scenes", label: "场景标识", icon: "video" },
       { view: "mediaInspect", label: "合规检测", icon: "scan" },
       { view: "mediaRepair", label: "元数据修复", icon: "repair" },
     ],

@@ -152,6 +152,26 @@ export default function ApiPage() {
           </div>
         </div>
 
+        <div className="ui-card" style={{ marginTop: 18 }}>
+          <div className="ui-card-head"><span className="ico">+</span><h3>打标服务 · 多模态与场景</h3></div>
+          <div className="ui-card-body">
+            <p style={{ marginTop: 0, color: "var(--text-600)" }}>
+              以下接口由 labeling-backend 提供，经前端代理到 8002 端口。单文件打标仍使用 /api/v1/metadata-label-jobs。
+            </p>
+            <table className="spec-table">
+              <thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td>POST</td><td>/api/v1/multimodal/label</td><td>拆分视频或接收多文件，写入并校验成分与重组结果</td></tr>
+                <tr><td>POST</td><td>/api/v1/multimodal/parse</td><td>读出成分和重组文件中的隐式标识</td></tr>
+                <tr><td>POST</td><td>/api/v1/multimodal/verify</td><td>校验份数、附录 E 和重组形态</td></tr>
+                <tr><td>POST</td><td>/api/v1/scenes/virtual/label</td><td>虚拟场景起始画面显式标识 + 隐式标识</td></tr>
+                <tr><td>POST</td><td>/api/v1/scenes/interactive/label</td><td>交互界面显式标识，可选内容文件隐式标识</td></tr>
+                <tr><td>GET</td><td>/api/v1/composite-bundles/{"{id}"}</td><td>下载结果 zip</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div style={{ marginTop: 18, fontSize: 13, color: "var(--text-400)", textAlign: "center" }}>
           交互式 Swagger 文档：服务运行时访问 <code>http://localhost:8000/docs</code>
         </div>

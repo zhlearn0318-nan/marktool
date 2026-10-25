@@ -123,6 +123,10 @@ export interface RepairPlanOptions {
     source_reference: string;
     write_context: RepairWriteContext;
   };
+  /** 冲突组 id → 候选 id。同一文件有多组时必须逐组给出。 */
+  selections?: Record<string, string>;
+  /** 只有一个冲突组时，可以只传选中的候选 id。 */
+  selected_candidate_id?: string;
 }
 
 export interface RepairFieldChange {
@@ -319,4 +323,125 @@ export interface ComplianceReport {
   detector_version: string;
   exiftool_version: string | null;
   elapsed_ms: number;
+  /** 仅多模态 / 场景自动识别时出现。单模态报告没有这块。 */
+  subject?: {
+    kind: string;
+    label: string;
+  };
+  units?: {
+    name: string;
+    role: string;
+    conclusion: ComplianceConclusion;
+    reason_code?: string | null;
+    record_count: number;
+    issues: ComplianceIssue[];
+  }[];
+  /** 内容互相矛盾的隐式标识。完全相同的重复不会出现在这里。 */
+  conflict_groups?: ConflictGroup[];
+  /** 虚拟场景或交互场景的显式提示能否先出预览。 */
+  explicit_preview?: {
+    available: boolean;
+    reason?: string;
+  };
+}
+
+export interface ConflictCandidate {
+  id: string;
+  index: number;
+  tag: string;
+  location: string;
+  fields: Record<string, unknown>;
+  differing_fields: string[];
+}
+
+export interface ConflictGroup {
+  id: string;
+  file: string;
+  group_key: string;
+  differing_fields: string[];
+  candidates: ConflictCandidate[];
+}
+
+export interface ExplicitChange {
+  file: string;
+  field: string;
+  before?: unknown;
+  after?: unknown;
+  action: string;
+}
+
+export interface ExplicitPreview {
+  preview_id: string;
+  expires_at: string;
+  kind: string;
+  notice: string;
+  position_rationale: string;
+  changes: ExplicitChange[];
+  before_url: string;
+  after_url: string;
+}
+
+export interface CompositeRepairPlan {
+  plan_id: string;
+  plan_hash: string;
+  repair_plan: {
+    executable: boolean;
+    repairability: string;
+    actions: string[];
+    blocking_reasons: string[];
+    field_changes: { field: string; before: unknown; after: unknown; reason: string }[];
+  };
+}
+
+/* ===== 多模态与场景标识（/api/v1/multimodal、/api/v1/scenes） ===== */
+
+export interface ClauseCheck {
+  id: string;
+  clause: string;
+  passed: boolean;
+  severity: "error" | "warning";
+  message: string;
+}
+
+export interface ModalityComponentReport {
+  role: string;
+  passed: boolean;
+  file_name?: string;
+  carrier?: string;
+  produce_id?: string;
+  checks: ClauseCheck[];
+  labels?: Record<string, string>[];
+}
+
+export interface SceneReport {
+  passed: boolean;
+  operation?: string;
+  scene_type?: string;
+  combination?: string;
+  recombined_kind?: string;
+  notes?: string[];
+  bundle_id?: string;
+  download_url?: string;
+  request_id?: string;
+  components?: ModalityComponentReport[];
+  recombined?: {
+    passed: boolean;
+    file_name?: string;
+    carrier?: string;
+    kind?: string;
+    checks: ClauseCheck[];
+    implicit_label?: Record<string, string> | null;
+  };
+  checks?: ClauseCheck[];
+  explicit?: {
+    text?: string;
+    position?: string;
+    placements?: string[];
+    persistent?: boolean;
+    color?: string;
+    background?: string;
+    height_ratio?: number;
+  };
+  implicit_label?: Record<string, string> | null;
+  service_hint?: { enabled?: boolean; position?: string; note?: string };
 }

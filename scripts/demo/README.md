@@ -1,0 +1,21 @@
+# 演示录屏
+
+`demo_script.py` 用 Playwright 打开 TraceMark，视口 1280×800，在页面顶部放中文字幕条，并录下：
+
+1. 平台概览
+2. 多模态拆分打标。页面不再单独校验，复核入口跳到合规检测
+3. 虚拟场景和交互场景的写入
+4. 合规检测依次上传：正常的多模态 MP4、带重复标识的多模态 MP4、虚拟场景包、交互场景包
+5. 对重复标识的 MP4 生成修复方案、确认执行、下载并复检
+6. 冲突标识：脚本把打标后的多模态 MP4 复制为 `work/multimodal-conflict.mp4`，并在 QuickTime 注释里写入另一份 ProduceID。页面列出候选对比，选中一份后点「按所选标识修复」，下载并复检为合规
+7. 显式提示：脚本把合规的虚拟场景包改成 `work/virtual-explicit-broken.zip`（文字改为「未按标准提示」，位置改为 `center`，起始画面像素不变）。检测后点「生成修复预览」，左右对比原图和修复后的图，再点「确认并修复」，下载并复检为合规
+
+脚本会自己生成 5 秒的演示 MP4 和交互场景文本。三个服务需要已经在 8000、8002、5173 监听。
+
+```bash
+python3 -m pip install playwright
+python3 -m playwright install chromium
+python3 scripts/demo/demo_script.py --base http://127.0.0.1:5173 --out /tmp/marktool-demo
+```
+
+输出是 `/tmp/marktool-demo/marktool-demo.mp4`（H.264，无音轨）和 `timeline.json`。

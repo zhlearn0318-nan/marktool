@@ -61,10 +61,13 @@ MP3 读写使用 Mutagen，并保留无关的 ID3 帧。视频和音频通过 ff
 
 ## 目录与配置
 
-- `app/adapters/`：视频、音频和文档适配器。
+- `app/adapters/`：视频、音频和文档适配器。多模态和场景复用这里，不另写一套 M4A/MP3/Markdown 写入。
 - `app/metadata/`：图片适配器、各文档载体、合规判断、编号登记与修复。
 - `app/core/`：七字段模型、全标签读取、检测器、任务流水线、存储与工作线程。
-- `app/api/`：标注、检测、修复和健康检查接口。
+- `app/modalities/`：按角色把成分文件分发到上述适配器；字幕和纯文本仍用尾段。
+- `app/multimodal/`、`app/scenes/`：拆分重组，以及虚拟场景、交互场景。
+- `app/api/`：标注、检测、修复、多模态、场景和健康检查接口。
+- `app/cli.py`：`python -m app.cli multimodal` 与 `python -m app.cli scene`。
 - `config/default_config.yaml`：外部工具、存储、保留期、并发限制和能力配置。
 - `config/exiftool_aigc.config`：ExifTool 自定义 XMP 命名空间。
 - `tests/`：单元测试、接口测试和真实文件回归测试。
@@ -75,7 +78,7 @@ MP3 读写使用 Mutagen，并保留无关的 ID3 帧。视频和音频通过 ff
 
 从本目录运行 `python -m pytest tests -q`；完整验收需准备外部工具并设置 `AIGC_REQUIRE_TOOLS=1`，具体环境命令见仓库主页。
 
-当前服务未集成多模态拆分、虚拟场景或交互场景模块，也未实现 C2PA 互转、数字签名或信号层鲁棒水印。
+多模态拆分、虚拟场景和交互场景已接入，说明见仓库根目录 `README.md` 与 `docs/技术交接文档.md`。单文件的 `metadata-label-jobs`、`compliance-inspect` 和 `metadata-repair-*` 行为保持不变。仍未实现 C2PA 互转、数字签名或信号层鲁棒水印。
 
 ## 参考
 

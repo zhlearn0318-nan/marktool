@@ -346,7 +346,8 @@ class DocumentComplianceInspector:
                               if len(records) == 1 and r.aigc is not None), None)
         produce_id = parsed_single.get("ProduceID") if parsed_single else None
 
-        return build_report(
+        from ..core.conflict_groups import attach_to_report
+        return attach_to_report(build_report(
             bmff=bmff_not_applicable(), media=media,
             candidates=[candidate_entry(r) for r in records], issues=issues,
             conclusion=conclusion, reason_code=reason_code,
@@ -356,7 +357,7 @@ class DocumentComplianceInspector:
             elapsed_ms=elapsed(), detected_mime=self.mime,
             detector_version=self.detector_version,
             exiftool_version_value=exiftool_version(self._exiftool),
-            extra={"document": document})
+            extra={"document": document}), records)
 
     def _page_count(self, path: Path) -> int | None:
         from ..core.reader import exiftool_tags
