@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
 import pytest
 
+from app.adapters.audio import M4aAdapter
 from app.adapters.video import Mp4Adapter
 from app.core import aigc
 from app.labeling_error import LabelingError
-from app.modalities.audio_label import AudioAdapter
 from app.multimodal.service import (
     label_multimodal, parse_multimodal_path, verify_multimodal_path,
 )
@@ -48,8 +49,8 @@ def _aigc(produce_id: str, label: str = "1") -> dict:
 def test_audio_m4a_roundtrip(tmp_path):
     source = make_tone(tmp_path)
     dest = tmp_path / "labeled.m4a"
-    adapter = AudioAdapter(exiftool="exiftool", ffprobe="ffprobe", ffmpeg="ffmpeg",
-                           exiftool_config=str(EXIFTOOL_CONFIG))
+    adapter = M4aAdapter(exiftool="exiftool", ffprobe="ffprobe", ffmpeg="ffmpeg",
+                         exiftool_config=str(EXIFTOOL_CONFIG))
     adapter.write_metadata(source, dest, VALID_AIGC)
     records = adapter.detect_existing(dest)
     assert len(records) == 1
@@ -256,3 +257,28 @@ def test_interactive_scene_with_and_without_content(tmp_path):
     }), encoding="utf-8")
     failed = verify_interactive_scene(broken, tools)
     assert failed["passed"] is False
+
+
+def test_mp3_and_markdown_use_registered_carriers(tmp_path):
+    """MP3 与 Markdown 走 main 已有适配器，不转码、不写尾段。"""
+    mp3 = tmp_path / "tone.mp3"
+    try:
+        subprocess.check_call([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "sine=frequency=880:duration=1",
+            "-c:a", "libmp3lame", "-q:a", "6", str(mp3),
+        ])
+    except subprocess.CalledProcessError:
+        pytest.skip("ffmpeg 未带 libmp3lame，跳过 MP3 成分用例")
+    note = tmp_path / "note.md"
+    note.write_text("# 标题\n\n正文。\n", encoding="utf-8")
+    report = label_multimodal(
+        tmp_path / "out", _aigc("PID-MP3-MD-1"), tools=_tools(tmp_path),
+        parts={"audio": mp3, "text": note},
+    )
+    assert report["passed"] is True
+    assert report["audio_transcoded"] is False
+    by_role = {item["role"]: item for item in report["components"]}
+    assert by_role["audio"]["carrier"] == "mp3-id3v2-aigc-v1"
+    assert by_role["text"]["carrier"] == "md-frontmatter-aigc-v1"
+    assert by_role["audio"]["file_name"] == "audio.mp3"

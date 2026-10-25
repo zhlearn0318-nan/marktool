@@ -68,7 +68,11 @@ class ProjectPolicyResult(BaseModel):
 
 
 class CrossReaderResult(BaseModel):
-    status: Literal["matched", "diverged", "not_run", "unavailable"]
+    # ``not_applicable`` 与 ``not_run`` 是两件事：前者是"这个模态根本不存在第二条
+    # 独立读取路径"（如 Markdown 只有项目自己那套 YAML 解析器），后者是"该做而没做"。
+    # 规划器只拦后者——把"已知没有"和"不知道"混成一个值，Markdown 就会被永远挡在
+    # 自动修复之外。
+    status: Literal["matched", "diverged", "not_run", "unavailable", "not_applicable"]
     detail: Optional[str] = None
 
 
@@ -98,7 +102,10 @@ class MetadataComplianceResult(BaseModel):
     detected_format: str
     mime_type: str
     file_sha256: str
-    pixel_sha256: str
+    # 内容指纹：跨文件比对"是不是同一份内容"。图片侧它就是像素哈希；
+    # 视频/文本经 repair_inspection 装配时按模态换成流签名 / 正文哈希 / 结构签名。
+    content_fingerprint: str
+    fingerprint_kind: str = "pixel"
     record_count: int
     aigc_metadata: Optional[dict[str, Any]] = None
     candidates: list[CandidateEvidence] = Field(default_factory=list)
@@ -108,6 +115,13 @@ class MetadataComplianceResult(BaseModel):
     source_verification: SourceVerificationResult
     c2pa_presence: C2PAPresencePayload
     extended_xmp: bool = False
+    # 载体本身能不能安全重写。**与上面的 repairability 不是一回事**：那个说的是
+    # "标识该怎么补"，这个说的是"这个容器还让不让人写"——PDF 有数字签名时，标识
+    # 修得再对，ExifTool 的整体重写也会让签名失效。空列表 = 可以写（图片恒为空）。
+    carrier_blockers: list[str] = Field(default_factory=list)
+    # 原因里有没有"工具内无解"的那一类：为真时判 forbidden（人工也改不了，
+    # 得先把签名/加密去掉再来），否则判 manual_review（交人判断来源）。
+    carrier_forbidden: bool = False
     raw_records: list[AIGCRecord] = Field(default_factory=list, exclude=True)
 
 
@@ -115,6 +129,19 @@ class ComplianceInspectionError(RuntimeError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+def canonical_aigc_value(value: str) -> str:
+    """把一处标识文本规范化，供"两条读取路径是不是读到同一份"逐字比对。
+
+    可解析的按 JSON 规范化（键排序、去空白），不可解析的原样保留——
+    两条路径读到**同一段坏字节**也算一致，不该因为"都解析不出来"而报分歧。
+    """
+    try:
+        return json.dumps(json.loads(value), ensure_ascii=False,
+                          sort_keys=True, separators=(",", ":"))
+    except (json.JSONDecodeError, TypeError):
+        return value.strip()
 
 
 class MetadataComplianceInspector:
@@ -164,15 +191,7 @@ class MetadataComplianceInspector:
 
     @staticmethod
     def _canonical_value(value: str) -> str:
-        try:
-            return json.dumps(
-                json.loads(value),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        except (json.JSONDecodeError, TypeError):
-            return value.strip()
+        return canonical_aigc_value(value)
 
     @staticmethod
     def _candidate_evidence(records: list[AIGCRecord]) -> list[CandidateEvidence]:
@@ -234,7 +253,7 @@ class MetadataComplianceInspector:
         return CrossReaderResult(status="matched"), None
 
     def _verify_source(
-        self, document: Optional[dict], pixel_sha256: str
+        self, document: Optional[dict], content_fingerprint: str
     ) -> tuple[SourceVerificationResult, list[ComplianceIssue]]:
         if not isinstance(document, dict):
             return SourceVerificationResult(status="not_applicable"), []
@@ -269,7 +288,7 @@ class MetadataComplianceInspector:
             if registered is None:
                 missing += 1
                 details.append(f"{role} 编号未在本地登记库中找到")
-            elif registered == pixel_sha256:
+            elif registered == content_fingerprint:
                 matched += 1
                 details.append(f"{role} 编号与当前图片像素指纹一致")
             else:
@@ -502,7 +521,7 @@ class MetadataComplianceInspector:
             detected_format=format_name,
             mime_type=mime_type,
             file_sha256=file_sha256,
-            pixel_sha256=pixel_sha256,
+            content_fingerprint=pixel_sha256,
             record_count=len(records),
             aigc_metadata=document["AIGC"] if document else None,
             candidates=self._candidate_evidence(records),

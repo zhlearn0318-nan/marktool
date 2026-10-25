@@ -1,0 +1,24 @@
+源迹 TraceMark 本地运行说明
+
+首次使用请按 README.md 安装 Python、Node.js、ExifTool 和 FFmpeg，并安装前后端依赖。
+
+1. 双击“启动最新版.bat”，启动两个后端和前端并打开网页。
+2. 只启动服务、不打开浏览器：
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-local.ps1 -NoBrowser
+3. 如工具不在 PATH 中，将 start-local.config.example.psd1 复制为
+   start-local.config.psd1 后填写路径。本机配置不会推送到 GitHub。
+4. 服务已运行时脚本会复用；修改后端代码后，需先停止对应服务再启动。
+
+访问地址：
+- 前端：http://127.0.0.1:5173/
+- 图片报告接口：http://127.0.0.1:8000/docs
+- 元数据服务接口：http://127.0.0.1:8002/docs
+
+支持范围：
+- 元数据标注：JPEG、PNG、MP4、M4A、MP3、Markdown、PDF、HTML、DOCX。
+- 合规检测与修复：JPEG、PNG、MP4、Markdown、PDF、HTML、DOCX。
+- M4A / MP3 支持标注、下载、回读校验和音频完整性检查。
+- 修复需先查看计划再确认执行，原始文件保留。
+
+启动失败时查看根目录的 backend-local.err.log、labeling-local.err.log、
+frontend-local.err.log。完整配置、接口和测试说明见 README.md。

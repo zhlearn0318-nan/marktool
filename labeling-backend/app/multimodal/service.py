@@ -169,6 +169,11 @@ def _accept_role_file(role: str, src: Path, dest_dir: Path, tools: ToolPaths) ->
             suffix = ".png"
         return _copy_named(src, dest_dir, "image" + suffix), False
     if role == "audio":
+        from ..core.mimetype import SNIFF_BYTES, detect_mime
+        head = src.read_bytes()[:SNIFF_BYTES]
+        if detect_mime(head, src.name) == "audio/mpeg":
+            # MP3 走与单文件打标相同的 ID3 适配器，不再转成 M4A。
+            return _copy_named(src, dest_dir, "audio.mp3"), False
         target = dest_dir / "audio.m4a"
         transcoded = normalize_to_m4a(src, target, ffmpeg=tools.ffmpeg, ffprobe=tools.ffprobe)
         return target, transcoded
@@ -635,16 +640,23 @@ def _role_from_name(name: str) -> str | None:
 
 
 def _role_from_header(path: Path) -> str | None:
+    from ..core.mimetype import SNIFF_BYTES, detect_mime
     try:
-        head = path.read_bytes()[:16]
+        head = path.read_bytes()[:SNIFF_BYTES]
     except OSError:
         return None
-    if head[:3] == b"\xff\xd8\xff":
+    mime = detect_mime(head, path.name)
+    if mime in {"image/jpeg", "image/png"}:
         return "image"
-    if head[:8] == b"\x89PNG\r\n\x1a\n":
-        return "image"
-    if len(head) >= 12 and head[4:8] == b"ftyp":
+    if mime == "video/mp4":
         return "video"
+    if mime in {"audio/mp4", "audio/mpeg"}:
+        return "audio"
+    if mime in {
+        "text/markdown", "application/pdf", "text/html",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }:
+        return "text"
     if head.startswith(b"RIFF"):
         return "audio"
     return "text" if b"\x00" not in head[:8] else None

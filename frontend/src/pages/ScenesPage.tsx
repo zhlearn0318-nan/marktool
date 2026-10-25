@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Alert, Input, Select, Switch, Tabs, Upload, message } from "antd";
 import PageBanner from "../components/PageBanner";
+import ToolSteps from "../components/ToolSteps";
 import { downloadComposite, labelInteractiveScene, labelVirtualScene } from "../api";
 import type { ClauseCheck, SceneReport } from "../types";
 
@@ -252,6 +253,7 @@ export default function ScenesPage() {
         sub="按第 5.5、5.6 条添加可感知的文字提示，并在内容文件中写入恰好一份附录 E 隐式标识。"
       />
       <section className="section">
+        <ToolSteps items={["填写显式提示", "写入并校验", "下载场景包"]} active={0} />
         <Tabs
           items={[
             { key: "virtual", label: "虚拟场景", children: <VirtualPane /> },

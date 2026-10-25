@@ -80,7 +80,42 @@ def test_inspect_compliant(client, tmp_path):
     assert d["record_count"] == 1
     assert d["issues"] == []
     assert d["candidates"][0]["parseable"] is True
-    assert d["registry"]["mode"] == "skipped"       # 未接登记库，不报错
+    # 登记库已接上：报告的是"这个编号本机没见过"，而不是"本服务没接登记库"。
+    # 两者对使用者是两件事——后者是能力缺失，前者是关于这份文件的一条信息。
+    assert d["registry"]["mode"] == "local_produceid"
+    assert d["registry"]["produce_id"] == VALID_AIGC["ProduceID"]
+    assert d["registry"]["known"] is False
+
+
+def test_inspect_reports_known_produce_id_after_labeling(tmp_path):
+    """打标登记过的 MP4，再检测时应报 known=True——三种模态共用一个登记库。"""
+    import json
+    import time
+
+    with _make_client(tmp_path) as c:
+        request = {"standard": "GB45438-2025", "modality": "video",
+                   "existing_metadata_policy": "reject", "AIGC": VALID_AIGC}
+        accepted = c.post(
+            "/api/v1/metadata-label-jobs",
+            files={"file": ("clip.mp4", CLEAN_MP4.read_bytes(), "video/mp4"),
+                   "request": (None, json.dumps(request, ensure_ascii=False),
+                               "application/json")})
+        assert accepted.status_code in (200, 201, 202), accepted.text
+        job_url = f"/api/v1/metadata-label-jobs/{accepted.json()['job_id']}"
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            job = c.get(job_url).json()
+            if job.get("status") in {"succeeded", "failed"}:
+                break
+            time.sleep(0.1)
+        assert job["status"] == "succeeded", job
+
+        output = c.get(job["output"]["download_url"]).content
+        report = _post(c, output).json()
+
+    assert report["conclusion"] == "compliant", report
+    assert report["registry"]["mode"] == "local_produceid"
+    assert report["registry"]["known"] is True
 
 
 def test_inspect_duplicate_via_endpoint(client, tmp_path):

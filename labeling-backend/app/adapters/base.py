@@ -8,7 +8,9 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -19,6 +21,16 @@ from ..core.reader import AIGCRecord, read_aigc_records
 
 
 class AdapterError(Exception):
+    pass
+
+
+class FileContentError(AdapterError):
+    """文件**内容本身**的问题（不是文本文件、已加密、已签名、被截断…）。
+
+    与工具故障区分开：这类错误说明用户交上来的文件不可处理，API 应当回 415
+    （与 /compliance-inspect 对同一份文件的判定一致），而不是报成 500 服务故障，
+    也不该建一个注定失败的任务。流水线侧仍按 AdapterError 捕获（本类是子类）。
+    """
     pass
 
 
@@ -35,10 +47,13 @@ class BaseAdapter:
     carrier_id = ""
     modality = ""
     supported_mimes: tuple[str, ...] = ()
+    input_format: str | None = None
 
     def __init__(self, exiftool: str = "exiftool", ffprobe: str = "ffprobe",
                  ffmpeg: str = "ffmpeg", exiftool_config: str | None = None):
-        self.exiftool = exiftool
+        # 保持调用方传入显式路径的优先级；默认命令名可由当前进程的
+        # EXIFTOOL_PATH 覆盖，便于便携版和测试环境，不改变部署默认值。
+        self.exiftool = os.environ.get("EXIFTOOL_PATH", exiftool) if exiftool == "exiftool" else exiftool
         self.ffprobe = ffprobe
         self.ffmpeg = ffmpeg
         self.exiftool_config = exiftool_config
@@ -94,10 +109,24 @@ class BaseAdapter:
                               duration_tolerance: float = 0.1) -> MediaReport:
         raise NotImplementedError
 
+    # ---- 内容指纹（子类实现）----
+    def content_fingerprint(self, path: str | Path) -> tuple[str, str]:
+        """返回 ``(指纹值, 指纹种类)``，供编号登记库把"提供者+编号"绑定到内容。
+
+        与 ``media_integrity_check`` 分工不同：完整性是**同一文件自己比自己**
+        （写入前后有没有被改动），指纹是**跨文件比**（两份文件是不是同一份内容）。
+
+        因此指纹必须**在写入标识后保持不变**——否则登记库核对会把正常写入
+        误报成"同号异内容"。图片的像素哈希天然满足（不含元数据段）。
+        """
+        raise NotImplementedError
+
     # ---- ffprobe 工具 ----
     def _ffprobe_json(self, path: str | Path) -> dict:
-        cmd = [self.ffprobe, "-v", "error",
-               "-show_entries", "format=format_name,duration"
+        cmd = [self.ffprobe, "-v", "error"]
+        if self.input_format:
+            cmd += ["-f", self.input_format]
+        cmd += ["-show_entries", "format=format_name,duration"
                ":stream=codec_type,codec_name,width,height,sample_rate,channels",
                "-of", "json", str(path)]
         out = subprocess.run(cmd, capture_output=True, text=True,
@@ -105,3 +134,13 @@ class BaseAdapter:
         if out.returncode != 0:
             raise AdapterError(f"ffprobe 无法探测文件: {out.stderr.strip()[:200]}")
         return json.loads(out.stdout or "{}")
+
+
+def fingerprint_of(payload) -> str:
+    """把结构化指纹压成 sha256 十六进制，与图片像素哈希同为 64 位十六进制。
+
+    用 canonical JSON（键排序 + 紧凑分隔符）保证同一份内容每次都得到同一个值。
+    """
+    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                           separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

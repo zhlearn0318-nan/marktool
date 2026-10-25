@@ -1,82 +1,107 @@
-import { Collapse, Steps } from "antd";
+import { Collapse } from "antd";
 import PageBanner from "../components/PageBanner";
+import Icon from "../components/Icon";
 import type { View } from "../nav";
-
-const FAQ = [
+const questions = [
   {
-    q: "源迹 TraceMark 是“检测内容是否由 AI 生成”吗？",
-    a: "不是。核心能力是“检测内容是否依法标注了 AIGC 标识” —— 在文件里找标识、验证其结构是否合规，而非推测内容本身是否由 AI 生成。AI 内容概率仅作兜底参考，且默认未启用。",
+    key: "scope",
+    label: "目前可以处理哪些文件？",
+    children:
+      "元数据标注支持 JPEG、PNG、MP4、M4A、MP3、Markdown、PDF、HTML 和 DOCX。图片、视频和文档还支持合规检测及按计划修复；M4A / MP3 当前支持打标与回读校验，合规检测及修复尚未开放。",
   },
   {
-    q: "目前支持哪些文件与法规？",
-    a: "图片（JPEG/PNG）与视频（MP4）支持隐式标识的写入、解析和合规检测。多模态页面可把视频拆成画面、音频和字幕后分别标识再重组。虚拟场景与交互场景同时处理显式文字提示和内容文件中的隐式标识。法规依据是 GB 45438—2025。标准互转和水印仍未实现。",
+    key: "detect",
+    label: "合规检测会判断内容是不是 AI 生成的吗？",
+    children:
+      "本平台检查文件中已有的 AIGC 标识及其字段结构。它不根据画面推测内容是否由 AI 生成，也不会把未检出标识直接当作内容由人类创作的证明。",
   },
   {
-    q: "隐式标识是怎么检测的？",
-    a: "读取图片 XMP 元数据中的 AIGC JSON，并对照 GB 45438 附录 E 的结构进行 jsonschema 校验：缺失记为缺失，结构不规范记为待整改，完整合规则通过。该链路真实可跑，仅依赖 Pillow 与 jsonschema。",
+    key: "multimodal",
+    label: "多模态和场景标识在哪里？",
+    children:
+      "工作空间里的「多模态」会把视频拆成画面、音频和字幕，分别写入隐式标识后再重组。「场景标识」按第 5.5、5.6 条处理虚拟场景起始画面和交互界面提示。单文件的标注、检测和修复仍走原来的入口。",
   },
   {
-    q: "显式文字与水印检测为什么显示“未启用”？",
-    a: "显式文字（OCR）与像素水印（TrustMark）属于重型能力，已在引擎中预留统一插件接口，MVP 以占位形式呈现，可在不改动调用方的前提下平滑接入。",
+    key: "original",
+    label: "标注和修复会改动我的原件吗？",
+    children:
+      "上传后服务会生成新的结果文件供下载，原件保留。处理聚焦元数据，图片不重新压缩像素，视频不转码。修复工作台会先展示变更计划，再由你确认执行。",
   },
   {
-    q: "可以私有化部署吗？",
-    a: "可以。后端为 Python + FastAPI，前端为静态资源，检测在服务端完成、图片不对外公开，适合私有化与离线环境部署。",
+    key: "producer",
+    label: "生产者编号应该填写什么？",
+    children:
+      "填写你实际使用的机构或内容生产者编号，请勿直接填写中文名称。使用可打印的 ASCII 字符，不要包含空格、双引号或反斜杠。平台会为首次标注自动生成内容编号。",
+  },
+  {
+    key: "result",
+    label: "看到“未检出标识”后，该怎么做？",
+    children:
+      "先确认内容来源及标注需要。如果应当添加 AIGC 标识，可到元数据标注页面写入；如果图片、视频或文档中已有标识但字段存在问题，可查看修复计划后再操作。",
+  },
+  {
+    key: "disabled",
+    label: "为什么部分报告项目显示尚未启用？",
+    children:
+      "原有图片报告保留了 OCR、像素水印与 AI 内容概率模块的展示位置，这些模块尚未启用。当前真实可用的能力集中在 AIGC 文件元数据标注、检查与修复。",
   },
 ];
-
-export default function HelpPage({ onNavigate }: { onNavigate: (v: View) => void }) {
+export default function HelpPage({
+  onNavigate,
+}: {
+  onNavigate: (view: View) => void;
+}) {
   return (
     <>
       <PageBanner
-        eyebrow="HELP CENTER"
+        eyebrow=""
         title="帮助中心"
-        sub="快速上手源迹 TraceMark，了解检测原理、支持范围与常见问题。"
+        sub="从选择工具到下载结果，让每一步都有清晰的指引。"
       />
-
       <section className="section">
-        <div className="ui-card" style={{ marginBottom: 24 }}>
-          <div className="ui-card-head"><span className="ico">◐</span><h3>三步完成一次检测</h3></div>
-          <div className="ui-card-body">
-            <Steps
-              direction="horizontal"
-              responsive
-              current={-1}
-              items={[
-                { title: "上传图片", description: "在合规检测控制台拖入或选择一张 PNG / JPEG。" },
-                { title: "选择法规", description: "默认中国国标 GB 45438-2025，点击开始检测。" },
-                { title: "查看报告", description: "获得评级、溯源、整改建议与原始元数据。" },
-              ]}
-            />
-          </div>
+        <div className="grid-3">
+          {[
+            {
+              title: "我想给内容添加标识",
+              text: "选择元数据标注，上传文件并填写生产者编号。",
+              view: "labeling" as View,
+              icon: "label" as const,
+            },
+            {
+              title: "我想检查文件是否有问题",
+              text: "选择合规检测，上传文件后查看检测结论。",
+              view: "mediaInspect" as View,
+              icon: "scan" as const,
+            },
+            {
+              title: "我想修复文件中的标识",
+              text: "选择元数据修复，先生成计划，再确认执行。",
+              view: "mediaRepair" as View,
+              icon: "repair" as const,
+            },
+          ].map((item) => (
+            <button
+              className="dashboard-tool"
+              onClick={() => onNavigate(item.view)}
+              key={item.view}
+            >
+              <Icon name={item.icon} size={24} />
+              <h3>{item.title}</h3>
+              <p>{item.text}</p>
+              <span className="text-link">
+                前往工具 <Icon name="arrow" size={16} />
+              </span>
+            </button>
+          ))}
         </div>
-
-        <div className="section-head" style={{ marginBottom: 24 }}>
-          <div className="eyebrow">FAQ</div>
-          <h2>常见问题</h2>
-          <hr className="hairline-gold center-hairline" style={{ marginTop: 16 }} />
-        </div>
-
-        <Collapse
-          accordion
-          items={FAQ.map((f, i) => ({
-            key: String(i),
-            label: <span style={{ fontWeight: 700, color: "var(--text-900)" }}>{f.q}</span>,
-            children: <div style={{ color: "var(--text-600)", fontSize: 14, lineHeight: 1.8 }}>{f.a}</div>,
-          }))}
-        />
-
-        <div
-          className="ui-card"
-          style={{ marginTop: 28, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16, padding: 28 }}
-        >
-          <div>
-            <h3 style={{ fontFamily: "var(--font-serif)", margin: 0, fontSize: 20, color: "var(--text-900)" }}>
-              准备好开始了吗？
-            </h3>
-            <div style={{ color: "var(--text-600)", marginTop: 6 }}>上传一张图片，30 秒看到完整合规报告。</div>
-          </div>
-          <button className="btn-gold" onClick={() => onNavigate("home")}>前往合规检测 →</button>
+        <h2 className="dashboard-title">常见问题</h2>
+        <div className="ui-card">
+          <Collapse
+            ghost
+            accordion
+            items={questions}
+            defaultActiveKey={["scope"]}
+          />
         </div>
       </section>
     </>

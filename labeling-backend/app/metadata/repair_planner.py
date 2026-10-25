@@ -197,11 +197,24 @@ class RepairPlanner:
                 blocking_reasons=["未发现标识；如需新增应进入普通标注流程"],
             )
 
+        # 载体自身不能安全重写时，后面的判断都没有意义：标识再规范，写下去也会
+        # 把签名/加密毁掉。所以放在最前面，而且**原样带出检测侧的理由**——
+        # 界面要显示的是"为什么不能修"，不是一句通用的拒绝。
+        if inspection.carrier_blockers:
+            return RepairPlanDraft(
+                repairability=(Repairability.FORBIDDEN if inspection.carrier_forbidden
+                               else Repairability.MANUAL_REVIEW),
+                executable=False,
+                blocking_reasons=list(inspection.carrier_blockers),
+            )
+
         blockers: list[str] = []
         if inspection.extended_xmp:
             blockers.append("Extended XMP 当前不能安全组装")
         if inspection.cross_reader.status == "diverged":
             blockers.append("项目读取器与 ExifTool 结果不一致")
+        # ``not_applicable`` 不在这个集合里，是有意的：它表示"该模态没有第二条
+        # 独立读取路径"（Markdown），是已知状态而非未知状态，不该拦。
         if self.require_cross_reader and inspection.cross_reader.status in {
             "not_run",
             "unavailable",
@@ -215,7 +228,13 @@ class RepairPlanner:
             return RepairPlanDraft(
                 repairability=Repairability.FORBIDDEN,
                 executable=False,
-                blocking_reasons=["编号登记与当前图片内容指纹冲突"],
+                # 理由不能写死"图片内容指纹"：一条编号被两个模态共用时，对着视频
+                # 说"图片指纹冲突"会把人带偏。具体是哪一种指纹、哪个角色冲突，
+                # 由检测侧的原话给出（``verify_source`` 已按模态措辞）。
+                blocking_reasons=(
+                    ["编号登记与当前内容的指纹冲突：要修就得伪造编号，故禁止自动修复"]
+                    + list(inspection.source_verification.details)
+                ),
             )
         if blockers:
             return RepairPlanDraft(

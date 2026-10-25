@@ -51,8 +51,8 @@ def is_attached_picture(stream: dict) -> bool:
 def normalize_to_m4a(src: str | Path, dst: str | Path, *, ffmpeg: str, ffprobe: str) -> bool:
     """得到一份可写 XMP 的 M4A。已经是无视频轨的 AAC/M4A 时直接复制。
 
-    返回值表示是否发生了转码。WAV、MP3 在当前 ExifTool 下不能写 XMP，
-    因此先转为 AAC。
+    返回值表示是否发生了转码。WAV 等没有适配器的音频先转为 AAC。
+    MP3 由调用方交给 ``Mp3Adapter``，不要送进本函数。
     """
     import shutil
 

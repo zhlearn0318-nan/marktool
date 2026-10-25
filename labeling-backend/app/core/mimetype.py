@@ -1,26 +1,165 @@
-"""按文件内容识别格式（开发手册 §9.1 / §13：不能只信任扩展名或浏览器 MIME）。"""
+"""按文件内容识别格式（开发手册 §9.1 / §13：不能只信任扩展名或浏览器 MIME）。
+
+二进制格式有魔数可认（JPEG/PNG/ISO-BMFF/PDF）；**纯文本格式没有魔数**，
+Markdown 因此只能采用"扩展名作为必要前提 + 内容健全性校验"的组合判定——
+绝不单凭扩展名放行（详见桌面文档 markdown-pdf-carrier-validation.md 的残留边界一节）。
+"""
 from __future__ import annotations
 
+import codecs
 
-def detect_mime(head: bytes) -> str | None:
-    """读取文件头若干字节，返回 MIME 类型；无法识别返回 None。"""
+# 上传时预读的字节数。JPEG/PNG/BMFF 只需前 16 字节，但 PDF 的 %PDF- 可能被
+# 前导垃圾/增量更新推到稍后，文本格式也要足够样本才能做 UTF-8 健全性判断。
+SNIFF_BYTES = 8192
+
+# PDF 签名允许出现的最大偏移（规范要求首行，但容忍少量前导字节）
+_PDF_SIGNATURE_WINDOW = 1024
+
+_MARKDOWN_SUFFIXES = (".md", ".markdown")
+_HTML_SUFFIXES = (".html", ".htm")
+_DOCX_SUFFIXES = (".docx",)
+
+
+def looks_like_utf8_text(sample: bytes) -> bool:
+    """样本是否像 UTF-8 文本：无 NUL 字节，且能按 UTF-8 增量解码。
+
+    不带 ``final=True`` 解码——调用方只拿到前若干字节，样本末尾正好切断一个
+    多字节字符是正常现象，不能因此判为二进制。该 helper 供 Markdown 与本轮
+    其他文本格式（HTML 等）共用。
+    """
+    if b"\x00" in sample:
+        return False
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    try:
+        decoder.decode(sample)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _suffix_of(filename: str | None) -> str:
+    if not filename:
+        return ""
+    name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    dot = name.rfind(".")
+    return name[dot:].lower() if dot > 0 else ""
+
+
+def detect_mime(head: bytes, filename: str | None = None) -> str | None:
+    """读取文件头若干字节，返回 MIME 类型；无法识别返回 None。
+
+    ``filename`` 仅供**无魔数格式**（Markdown）作为必要前提参与判定；二进制
+    格式一律只看内容，保证"改扩展名"骗不过格式识别（§13）。
+    """
     if len(head) >= 3 and head[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
     if len(head) >= 8 and head[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
     # ISO BMFF：偏移 4 处为 'ftyp'
     if len(head) >= 12 and head[4:8] == b"ftyp":
+        if b"M4A " in _bmff_brands(head):
+            return "audio/mp4"
         return "video/mp4"
+    if _looks_like_mp3(head):
+        return "audio/mpeg"
+    # PDF：以 %PDF- 开头；容忍前导垃圾（增量更新/传输噪声）
+    if head[:_PDF_SIGNATURE_WINDOW].find(b"%PDF-") >= 0:
+        return "application/pdf"
+    # DOCX：ZIP 魔数 + .docx 扩展名只是入口条件；适配器随后会验证完整 OOXML 包。
+    # 不能把所有 ZIP 都当 DOCX，也不能只看扩展名。
+    if _suffix_of(filename) in _DOCX_SUFFIXES and head.startswith(b"PK\x03\x04"):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    # HTML 支持 UTF-8 与显式声明的 GB18030。这里只做轻量入口识别，编码、根元素、
+    # head 唯一性由 HTML 载体适配器严格校验。
+    if _suffix_of(filename) in _HTML_SUFFIXES and b"\x00" not in head:
+        lowered = head.lower()
+        if b"<html" in lowered or b"<!doctype html" in lowered:
+            return "text/html"
+    # Markdown：无魔数 —— 扩展名必要前提 + UTF-8 文本健全性
+    if _suffix_of(filename) in _MARKDOWN_SUFFIXES and looks_like_utf8_text(head):
+        return "text/markdown"
     return None
 
 
-SUPPORTED_MIMES = ("image/jpeg", "image/png", "video/mp4")
+def _bmff_brands(head: bytes) -> set[bytes]:
+    """返回已读取 ftyp box 中的 major 与 compatible brands。"""
+    brands = {head[8:12]}
+    if len(head) < 16:
+        return brands
+    size = int.from_bytes(head[:4], "big")
+    end = min(len(head), size) if size >= 16 else len(head)
+    for offset in range(16, end - 3, 4):
+        brands.add(head[offset:offset + 4])
+    return brands
 
-# §12.2 文件命名：结果文件名沿用原格式后缀，图片与视频共用同一条流水线
+
+def _mp3_frame_offset(head: bytes) -> int | None:
+    """Read the ID3 header without loading album art or other tag payloads."""
+    if len(head) >= 10 and head[:3] == b"ID3":
+        # ID3v2 tag size 使用四字节 synchsafe integer，标签之后必须有音频帧。
+        if head[3] not in (2, 3, 4) or any(byte & 0x80 for byte in head[6:10]):
+            return None
+        offset = 10 + sum((byte & 0x7f) << shift
+                          for byte, shift in zip(head[6:10], (21, 14, 7, 0)))
+        # ID3v2.4 的 footer 标志表示 tag 后还有 10 字节 footer；其不计入
+        # header 的 synchsafe size，必须跳过才能落到真正的 MPEG 帧。
+        if head[3] == 4 and (head[5] & 0x10):
+            offset += 10
+        return offset
+    return 0
+
+
+def _looks_like_mp3(head: bytes) -> bool:
+    """识别 ID3v2 + MPEG frame 或裸 MPEG Layer 音频帧。"""
+    offset = _mp3_frame_offset(head)
+    if offset is None:
+        return False
+    if len(head) < offset + 4:
+        return False
+    b0, b1, b2 = head[offset:offset + 3]
+    # MPEG audio sync + 合法 version/layer/bitrate/sample-rate 组合。
+    return (b0 == 0xff and (b1 & 0xe0) == 0xe0 and (b1 & 0x18) != 0x08
+            and (b1 & 0x06) != 0x00 and (b2 & 0xf0) not in (0x00, 0xf0)
+            and (b2 & 0x0c) != 0x0c)
+
+
+async def detect_upload_mime(upload, head: bytes) -> str | None:
+    """Sniff uploads, seeking past large ID3 tags with constant memory use.
+
+    Restore the cursor after the initial header so saving/hashing still includes
+    every uploaded byte. ID3 alone is never enough: an MPEG frame must follow.
+    """
+    mime = detect_mime(head, upload.filename)
+    if mime is not None or not head.startswith(b"ID3"):
+        return mime
+    offset = _mp3_frame_offset(head)
+    if offset is None or offset + 4 <= len(head):
+        return None
+    try:
+        await upload.seek(offset)
+        frame = await upload.read(4)
+    finally:
+        await upload.seek(len(head))
+    return "audio/mpeg" if _looks_like_mp3(frame) else None
+
+
+SUPPORTED_MIMES = (
+    "image/jpeg", "image/png", "video/mp4", "audio/mp4", "audio/mpeg", "text/markdown",
+    "application/pdf", "text/html",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+)
+
+# §12.2 文件命名：结果文件名沿用原格式后缀，各模态共用同一条流水线
 SUFFIX_BY_MIME = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "video/mp4": ".mp4",
+    "audio/mp4": ".m4a",
+    "audio/mpeg": ".mp3",
+    "text/markdown": ".md",
+    "application/pdf": ".pdf",
+    "text/html": ".html",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
 }
 
 

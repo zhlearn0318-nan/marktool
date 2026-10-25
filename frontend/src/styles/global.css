@@ -223,9 +223,9 @@ body {
   font-weight: 700;
   font-size: 14px;
   letter-spacing: 0.02em;
-  color: #2a1e07 !important;
-  background: linear-gradient(135deg, var(--gold-300), var(--gold-600)) !important;
-  border: 0 !important;
+  color: #2a1e07;
+  background: linear-gradient(135deg, var(--gold-300), var(--gold-600));
+  border: 0;
   border-radius: 10px;
   padding: 0 22px;
   height: 44px;

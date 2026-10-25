@@ -11,6 +11,7 @@ moov/udta/trak 内多份 XMP/meta 同名与重复 box，由 ExifTool 全标签�
 """
 from __future__ import annotations
 
+import hashlib
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,7 +89,10 @@ def scan_top_level(path: str | Path, limit_boxes: int = 4096) -> BmffProbe:
                     probe.truncated = True
                     break
 
-                entry: dict = {"type": name, "size": size}
+                # offset/header 是给"取 mdat 载荷"用的（媒体字节指纹）：只有尺寸
+                # 没有位置，调用方就得自己再走一遍 box 树，两遍解析迟早不一致。
+                entry: dict = {"type": name, "size": size, "offset": off,
+                               "header": hdr}
                 if name == "ftyp":
                     probe.has_ftyp = True
                 elif name == "moov":
@@ -115,6 +119,41 @@ def scan_top_level(path: str | Path, limit_boxes: int = 4096) -> BmffProbe:
     except OSError as e:
         probe.error = f"文件读取失败: {e}"
     return probe
+
+
+def media_payload_digest(path: str | Path, chunk_size: int = 1 << 20) -> str | None:
+    """顶层 ``mdat`` **载荷**（不含 box 头）的 sha256；没有 mdat 返回 ``None``。
+
+    这是视频的内容指纹：ExifTool 写标识只动 moov/udta 与新增的 uuid box，
+    ``mdat`` 里的媒体字节原样复制——所以它跨"写标识"稳定，同时比 ffprobe 的
+    摘要强得多（摘要只到"时长 + 轨道"，两份时长相同的不同片子分不开）。
+
+    为什么哈希载荷而不是整个文件：box 头的尺寸字段、mdat 的位置都会随重写变化，
+    只有载荷不变。为什么不是所有顶层 box：moov 里就装着标识本身，哈希它等于
+    把指纹和标识绑在一起，改标识就会改指纹。
+    """
+    probe = scan_top_level(path)
+    if not probe.parse_ok:
+        return None
+    spans = [(b["offset"] + b["header"], b["size"] - b["header"])
+             for b in probe.top_boxes if b["type"] == "mdat"]
+    if not spans:
+        return None
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for start, length in spans:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    block = f.read(min(chunk_size, remaining))
+                    if not block:
+                        return None            # 文件在中途被截断
+                    digest.update(block)
+                    remaining -= len(block)
+    except OSError:
+        return None
+    return digest.hexdigest()
 
 
 def scan_wiped_comment_atoms(path: str | Path, zero_scan_cap: int = 2 * 1024 * 1024):

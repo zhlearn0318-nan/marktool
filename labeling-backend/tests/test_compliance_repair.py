@@ -4,6 +4,7 @@ import zlib
 from app.metadata.c2pa_presence import C2PAPresence
 from app.metadata.compliance import (
     ComplianceConclusion,
+    CrossReaderResult,
     MetadataComplianceInspector,
     Repairability,
 )
@@ -38,14 +39,39 @@ def _add_jpeg_app11(path, payload: bytes) -> None:
 
 
 def _offline_planner() -> RepairPlanner:
-    """结构归一化单元测试不依赖外部进程；生产默认仍要求交叉读取。"""
-    return RepairPlanner(require_cross_reader=False)
+    """结构归一化单元测试不依赖外部进程。
+
+    这里**不再**用 ``require_cross_reader=False`` 关掉闸门：那个开关生产代码里
+    一次都不传（``repair_service`` 用的是 ``RepairPlanner()``），关着测等于在验证
+    一份跑不到的配置——`test_repair_service` 之外的这四条曾经就是这样过来的。
+    改成直接把"交叉读取已匹配"注入检测结果，既不用起外部进程，又走生产默认的
+    同一个判定路径。
+    """
+    return RepairPlanner()
+
+
+def _plan(inspection, trusted=None):
+    """注入"交叉读取已匹配"后交给生产默认配置的规划器。"""
+    return _offline_planner().plan(_cross_read_matched(inspection), trusted)
+
+
+def _cross_read_matched(result):
+    """把"该做没做"的交叉读取补成"已匹配"，模拟真实图片检测器的产物。
+
+    只补 ``not_run``：那是"检测器没跑这一步"，单测里跑 ``inspect()`` 本来就拿不到。
+    真实结论（diverged / unavailable / not_applicable）一律原样保留——有测试专门
+    靠它们立命（``test_reader_divergence_...``），覆盖掉就等于把被测对象改没了。
+    """
+    if result.cross_reader.status == "not_run":
+        result.cross_reader = CrossReaderResult(
+            status="matched", detail="测试注入：两条读取路径一致")
+    return result
 
 
 def test_not_found_is_not_repairable(tmp_path):
     path = make_png(tmp_path / "plain.png")
     result = MetadataComplianceInspector().inspect(path)
-    plan = _offline_planner().plan(result)
+    plan = _plan(result)
 
     assert result.conclusion is ComplianceConclusion.NOT_FOUND
     assert plan.repairability is Repairability.NOT_APPLICABLE
@@ -74,7 +100,7 @@ def test_missing_reserved_fields_can_be_proposed_without_guessing_identity(tmp_p
         raw_xmp=legacy_xmp(without_reserved),
     )
     inspection = MetadataComplianceInspector().inspect(path)
-    plan = _offline_planner().plan(inspection)
+    plan = _plan(inspection)
 
     assert inspection.conclusion is ComplianceConclusion.NONCOMPLIANT
     assert plan.repairability is Repairability.CONFIRMABLE
@@ -100,7 +126,7 @@ def test_identifier_conflict_blocks_partial_record_repair(tmp_path):
     inspection = MetadataComplianceInspector(
         identifier_registry=registry
     ).inspect(path)
-    plan = _offline_planner().plan(inspection)
+    plan = _plan(inspection)
 
     assert inspection.source_verification.status == "conflict"
     assert plan.repairability is Repairability.FORBIDDEN
@@ -113,7 +139,7 @@ def test_identical_duplicates_can_be_deduplicated_after_confirmation(tmp_path):
         raw_xmp=duplicate_xmp(VALID_AIGC, VALID_AIGC),
     )
     inspection = MetadataComplianceInspector().inspect(path)
-    plan = _offline_planner().plan(inspection)
+    plan = _plan(inspection)
 
     assert inspection.reason_codes == ["AIGC_MULTIPLE_RECORDS"]
     assert plan.repairability is Repairability.CONFIRMABLE
@@ -127,7 +153,7 @@ def test_conflicting_duplicates_require_manual_review(tmp_path):
         raw_xmp=duplicate_xmp(VALID_AIGC, UPDATED_AIGC),
     )
     inspection = MetadataComplianceInspector().inspect(path)
-    plan = _offline_planner().plan(inspection)
+    plan = _plan(inspection)
 
     assert plan.repairability is Repairability.MANUAL_REVIEW
     assert plan.executable is False
@@ -138,7 +164,7 @@ def test_broken_json_needs_trusted_source(tmp_path):
     path = make_png(tmp_path / "broken.png", raw_xmp=broken_json_xmp())
     inspection = MetadataComplianceInspector().inspect(path)
 
-    automatic = _offline_planner().plan(inspection)
+    automatic = _plan(inspection)
     assert automatic.executable is False
 
     trusted = TrustedRepairInput(
@@ -146,7 +172,7 @@ def test_broken_json_needs_trusted_source(tmp_path):
         source_type="authorized_manual",
         source_reference="组长审批单 TEST-001",
     )
-    confirmed_source_plan = _offline_planner().plan(inspection, trusted)
+    confirmed_source_plan = _plan(inspection, trusted)
     assert confirmed_source_plan.executable is True
     assert confirmed_source_plan.proposed_document == {"AIGC": VALID_AIGC}
 
@@ -157,7 +183,7 @@ def test_c2pa_presence_blocks_automatic_repair(tmp_path):
     _add_png_chunk_before_iend(path, b"caBX", b"test-manifest-placeholder")
 
     inspection = MetadataComplianceInspector().inspect(str(path))
-    plan = _offline_planner().plan(inspection)
+    plan = _plan(inspection)
 
     assert inspection.c2pa_presence.status is C2PAPresence.PRESENT_UNVERIFIED
     assert plan.repairability is Repairability.MANUAL_REVIEW
@@ -172,7 +198,7 @@ def test_jpeg_c2pa_app11_presence_blocks_automatic_repair(tmp_path):
     _add_jpeg_app11(path, b"JP" + manifest_uuid + b"c2pa\x00placeholder")
 
     inspection = MetadataComplianceInspector().inspect(str(path))
-    plan = _offline_planner().plan(inspection)
+    plan = _plan(inspection)
 
     assert inspection.c2pa_presence.status is C2PAPresence.PRESENT_UNVERIFIED
     assert inspection.c2pa_presence.carrier == "jpeg:APP11/JUMBF"
@@ -197,7 +223,7 @@ def test_reader_divergence_makes_result_indeterminate(tmp_path):
 
     path = make_png(tmp_path / "diverged.png", aigc_dict=VALID_AIGC)
     inspection = MetadataComplianceInspector(exiftool=DivergedReader()).inspect(path)
-    plan = _offline_planner().plan(inspection)
+    plan = _plan(inspection)
 
     assert inspection.conclusion is ComplianceConclusion.INDETERMINATE
     assert inspection.cross_reader.status == "diverged"

@@ -1,23 +1,36 @@
 """按模态把隐式标识写到既有适配器，并给出统一的解析 / 校验结果。
 
-图片走 ``ImageMetadataService``，视频走 ``Mp4Adapter``，音频走 ``AudioAdapter``，
-文本走尾段写入。校验规则同一套：恰好一份、附录 E 七字段、回读与提交一致。
+图片走 ``ImageMetadataService``。视频、M4A、MP3、Markdown、PDF、HTML、DOCX
+走 ``app.adapters`` 里与单文件打标相同的适配器。字幕和纯文本没有这些容器，
+仍用尾段写入。校验规则同一套：恰好一份、附录 E 七字段、回读与提交一致。
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+from ..adapters import get_adapter
 from ..adapters.base import AdapterError
-from ..adapters.video import Mp4Adapter
 from ..core import aigc
+from ..core.mimetype import SNIFF_BYTES, detect_mime
 from ..core.reader import read_aigc_records
 from ..labeling_error import LabelingError
 from ..tools import ToolPaths
-from .audio_label import AudioAdapter
 from .text_label import text_records, visible_text, write_text_label
 
 ROLES = ("text", "image", "audio", "video")
 ROLE_SUFFIX = {"text": "T", "image": "I", "audio": "A", "video": "V"}
+# 与单文件 /api/v1/metadata-label-jobs 共用的文档载体。
+_DOCUMENT_MIMES = frozenset({
+    "text/markdown",
+    "application/pdf",
+    "text/html",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+})
+_ROLE_MIMES = {
+    "audio": frozenset({"audio/mp4", "audio/mpeg"}),
+    "video": frozenset({"video/mp4"}),
+}
+_TRAILER_SUFFIXES = {".txt", ".vtt", ".srt"}
 
 
 def derive_component_aigc(base: dict, role: str) -> dict:
@@ -55,21 +68,37 @@ def prepare_aigc(base: dict) -> dict:
     return normalized
 
 
-def _adapter_for(role: str, tools: ToolPaths):
-    common = dict(exiftool=tools.exiftool, ffprobe=tools.ffprobe,
-                  ffmpeg=tools.ffmpeg, exiftool_config=tools.exiftool_config)
-    if role == "video":
-        return Mp4Adapter(**common)
-    if role == "audio":
-        return AudioAdapter(**common)
-    raise LabelingError("UNSUPPORTED_MEDIA_TYPE", f"角色 {role} 没有 ExifTool 适配器")
+def _carrier_mime(role: str, path: Path) -> str | None:
+    """选择与单文件打标相同的适配器。
+
+    从 MP4 拆出的 AAC 经常仍带着 ``mp42`` 品牌，``detect_mime`` 会把它看成视频。
+    多模态已经按角色把它存成无画面的 ``.m4a``，这里改走 M4A 适配器，不改全局识别。
+    """
+    sniffed = _sniff_mime(path)
+    if role == "audio" and sniffed == "video/mp4" and path.suffix.lower() in {".m4a", ".m4b"}:
+        return "audio/mp4"
+    return sniffed
 
 
-def _records_from_reader(path: Path, tools: ToolPaths) -> list[dict]:
+def _sniff_mime(path: Path) -> str | None:
     try:
-        found = read_aigc_records(str(path), exiftool=tools.exiftool, config=tools.exiftool_config)
-    except Exception as exc:  # ReaderError 以及 exiftool 缺失
-        raise LabelingError("METADATA_READBACK_FAILED", f"读取隐式标识失败: {exc}") from exc
+        head = path.read_bytes()[:SNIFF_BYTES]
+    except OSError as exc:
+        raise LabelingError("METADATA_READBACK_FAILED", f"无法读取文件: {exc}") from exc
+    return detect_mime(head, path.name)
+
+
+def _adapter_for_mime(mime: str, tools: ToolPaths):
+    try:
+        return get_adapter(
+            mime, exiftool=tools.exiftool, ffprobe=tools.ffprobe,
+            ffmpeg=tools.ffmpeg, exiftool_config=tools.exiftool_config,
+        )
+    except AdapterError as exc:
+        raise LabelingError("UNSUPPORTED_MEDIA_TYPE", str(exc)) from exc
+
+
+def _record_dicts(found) -> list[dict]:
     return [{
         "source": record.tag_key,
         "raw": record.raw,
@@ -78,13 +107,60 @@ def _records_from_reader(path: Path, tools: ToolPaths) -> list[dict]:
     } for record in found]
 
 
+def _records_from_adapter(path: Path, tools: ToolPaths, mime: str) -> list[dict]:
+    adapter = _adapter_for_mime(mime, tools)
+    try:
+        found = adapter.detect_existing(path)
+    except AdapterError as exc:
+        raise LabelingError("METADATA_READBACK_FAILED", str(exc)) from exc
+    return _record_dicts(found)
+
+
+def _write_with_adapter(source: Path, destination: Path, aigc_obj: dict,
+                        policy: str, tools: ToolPaths, mime: str) -> str:
+    adapter = _adapter_for_mime(mime, tools)
+    try:
+        existing = adapter.detect_existing(source)
+    except AdapterError as exc:
+        raise LabelingError("METADATA_READBACK_FAILED", str(exc)) from exc
+    if existing and policy == "reject":
+        raise LabelingError("AIGC_METADATA_EXISTS", "文件已存在 AIGC 隐式标识，且策略为拒绝。")
+    try:
+        if existing and policy == "replace":
+            cleaned = destination.with_name(destination.stem + ".clean" + destination.suffix)
+            adapter.remove_aigc(source, cleaned)
+            adapter.write_metadata(cleaned, destination, aigc_obj)
+            cleaned.unlink(missing_ok=True)
+        else:
+            adapter.write_metadata(source, destination, aigc_obj)
+    except AdapterError as exc:
+        raise LabelingError("METADATA_WRITE_FAILED", str(exc)) from exc
+    return adapter.carrier_id
+
+
+def _records_from_reader(path: Path, tools: ToolPaths) -> list[dict]:
+    try:
+        found = read_aigc_records(str(path), exiftool=tools.exiftool, config=tools.exiftool_config)
+    except Exception as exc:  # ReaderError 以及 exiftool 缺失
+        raise LabelingError("METADATA_READBACK_FAILED", f"读取隐式标识失败: {exc}") from exc
+    return _record_dicts(found)
+
+
 def parse_file(role: str, path: str | Path, tools: ToolPaths | None = None) -> list[dict]:
     """解析单个成分文件中的隐式标识。``role`` 决定读取器。"""
     tools = tools or ToolPaths()
     file_path = Path(path)
     if role == "text":
+        mime = _carrier_mime(role, file_path)
+        if mime in _DOCUMENT_MIMES:
+            return _records_from_adapter(file_path, tools, mime)
         return text_records(file_path)
-    if role in ("image", "audio", "video"):
+    if role == "image":
+        return _records_from_reader(file_path, tools)
+    if role in ("audio", "video"):
+        mime = _carrier_mime(role, file_path)
+        if mime in _ROLE_MIMES[role]:
+            return _records_from_adapter(file_path, tools, mime)
         return _records_from_reader(file_path, tools)
     raise LabelingError("UNSUPPORTED_MEDIA_TYPE", f"不支持的模态角色: {role}")
 
@@ -98,29 +174,27 @@ def label_file(role: str, src: str | Path, dst: str | Path, aigc_obj: dict,
     destination = Path(dst)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if role == "text":
-        write_text_label(source, destination, aigc_obj, policy=policy)
-        return "text-trailer-aigc-v1"
+        mime = _carrier_mime(role, source)
+        if mime in _DOCUMENT_MIMES:
+            return _write_with_adapter(source, destination, aigc_obj, policy, tools, mime)
+        if source.suffix.lower() in _TRAILER_SUFFIXES:
+            write_text_label(source, destination, aigc_obj, policy=policy)
+            return "text-trailer-aigc-v1"
+        raise LabelingError(
+            "UNSUPPORTED_MEDIA_TYPE",
+            "文本支持 txt、vtt、srt 尾段，以及 Markdown、PDF、HTML、DOCX 的既有载体。",
+        )
     if role == "image":
         return _label_image(source, destination, aigc_obj, policy, tools)
     if role in ("audio", "video"):
-        adapter = _adapter_for(role, tools)
-        try:
-            existing = adapter.detect_existing(source)
-        except AdapterError as exc:
-            raise LabelingError("METADATA_READBACK_FAILED", str(exc)) from exc
-        if existing and policy == "reject":
-            raise LabelingError("AIGC_METADATA_EXISTS", "文件已存在 AIGC 隐式标识，且策略为拒绝。")
-        try:
-            if existing and policy == "replace":
-                cleaned = destination.with_name(destination.stem + ".clean" + destination.suffix)
-                adapter.remove_aigc(source, cleaned)
-                adapter.write_metadata(cleaned, destination, aigc_obj)
-                cleaned.unlink(missing_ok=True)
-            else:
-                adapter.write_metadata(source, destination, aigc_obj)
-        except AdapterError as exc:
-            raise LabelingError("METADATA_WRITE_FAILED", str(exc)) from exc
-        return adapter.carrier_id
+        mime = _carrier_mime(role, source)
+        expected = _ROLE_MIMES[role]
+        if mime not in expected:
+            raise LabelingError(
+                "UNSUPPORTED_MEDIA_TYPE",
+                f"{role} 文件的实际类型是 {mime or '未知'}，不在已注册适配器中。",
+            )
+        return _write_with_adapter(source, destination, aigc_obj, policy, tools, mime)
     raise LabelingError("UNSUPPORTED_MEDIA_TYPE", f"不支持的模态角色: {role}")
 
 
@@ -179,28 +253,26 @@ def verify_implicit(role: str, path: str | Path, expected: dict | None,
             "回读结果与写入对象一致" if matched else "回读结果与写入对象不一致",
         ))
     if integrity_src is not None and role == "text":
-        try:
-            same = visible_text(path) == visible_text(integrity_src)
-        except OSError as exc:
-            same = False
-            checks.append(check_item("text_integrity", "6.1", False, f"无法比较正文: {exc}"))
+        mime = _carrier_mime(role, Path(path))
+        if mime in _DOCUMENT_MIMES:
+            checks.append(_adapter_integrity(mime, integrity_src, path, tools, duration_tolerance))
         else:
-            checks.append(check_item(
-                "text_integrity", "6.1", same,
-                "可见正文未被隐式标识改写" if same else "可见正文在写入前后不一致",
-            ))
+            try:
+                same = visible_text(path) == visible_text(integrity_src)
+            except OSError as exc:
+                same = False
+                checks.append(check_item("text_integrity", "6.1", False, f"无法比较正文: {exc}"))
+            else:
+                checks.append(check_item(
+                    "text_integrity", "6.1", same,
+                    "可见正文未被隐式标识改写" if same else "可见正文在写入前后不一致",
+                ))
     if integrity_src is not None and role in ("audio", "video"):
-        adapter = _adapter_for(role, tools)
-        try:
-            media = adapter.media_integrity_check(
-                integrity_src, path, duration_tolerance=duration_tolerance)
-        except AdapterError as exc:
-            checks.append(check_item("media_integrity", "6.1", False, str(exc)))
+        mime = _carrier_mime(role, Path(path))
+        if mime in _ROLE_MIMES[role]:
+            checks.append(_adapter_integrity(mime, integrity_src, path, tools, duration_tolerance))
         else:
-            checks.append(check_item(
-                "media_integrity", "6.1", media.passed,
-                "媒体时长与轨道保持可用" if media.passed else f"媒体完整性未通过: {media.reason}",
-            ))
+            checks.append(check_item("media_integrity", "6.1", False, "无法按已注册适配器校验媒体完整性。"))
     if role == "image" and integrity_src is not None:
         checks.append(_image_pixel_check(integrity_src, path))
     passed = all(item["passed"] for item in checks if item["severity"] == "error")
@@ -212,6 +284,19 @@ def verify_implicit(role: str, path: str | Path, expected: dict | None,
         "records": records,
         "checks": checks,
     }
+
+
+def _adapter_integrity(mime: str, src: str | Path, dst: str | Path,
+                       tools: ToolPaths, duration_tolerance: float) -> dict:
+    adapter = _adapter_for_mime(mime, tools)
+    try:
+        media = adapter.media_integrity_check(src, dst, duration_tolerance=duration_tolerance)
+    except AdapterError as exc:
+        return check_item("media_integrity", "6.1", False, str(exc))
+    return check_item(
+        "media_integrity", "6.1", media.passed,
+        "内容主体在写入标识后保持可用" if media.passed else f"媒体完整性未通过: {media.reason}",
+    )
 
 
 def _image_pixel_check(src: str | Path, dst: str | Path) -> dict:

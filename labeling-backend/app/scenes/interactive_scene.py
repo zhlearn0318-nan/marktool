@@ -32,6 +32,8 @@ def _content_name(role: str, source: Path) -> str:
         return "content" + suffix
     if role == "image" and suffix in {".png", ".jpg", ".jpeg"}:
         return "content" + (".jpg" if suffix in {".jpg", ".jpeg"} else ".png")
+    if role == "audio" and suffix == ".mp3":
+        return "content.mp3"
     if role == "audio":
         return "content.m4a"
     if role == "video":
@@ -68,10 +70,13 @@ def label_interactive_scene(
         prepared = prepare_aigc(aigc_obj)
         source = Path(content)
         if content_role == "audio":
+            from ..core.mimetype import SNIFF_BYTES, detect_mime
             from ..multimodal.ffmpeg_util import normalize_to_m4a
-            normalized = work / "audio-normalized.m4a"
-            normalize_to_m4a(source, normalized, ffmpeg=tools.ffmpeg, ffprobe=tools.ffprobe)
-            source = normalized
+            sniffed = detect_mime(source.read_bytes()[:SNIFF_BYTES], source.name)
+            if sniffed != "audio/mpeg":
+                normalized = work / "audio-normalized.m4a"
+                normalize_to_m4a(source, normalized, ffmpeg=tools.ffmpeg, ffprobe=tools.ffprobe)
+                source = normalized
         content_file = _content_name(content_role, source)
         label_file(content_role, source, work / content_file, prepared, policy, tools)
     descriptor = {

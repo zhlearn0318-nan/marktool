@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Alert, Input, Select, Upload, message } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
+import ToolSteps from "../components/ToolSteps";
 import { downloadComposite, labelMultimodal, verifyMultimodal } from "../api";
 import type { ClauseCheck, SceneReport } from "../types";
 
@@ -84,6 +85,10 @@ export default function MultimodalPage() {
         sub="把视频拆成画面、音频和字幕，分别写入附录 E 隐式标识，再在重组文件上只保留一份。"
       />
       <section className="section">
+        <ToolSteps
+          items={["上传复合内容", "拆分打标并校验", "下载或复核"]}
+          active={report?.passed ? 2 : busy ? 1 : 0}
+        />
         <div className="grid-2" style={{ alignItems: "start" }}>
           <div className="ui-card">
             <div className="ui-card-head">
