@@ -47,6 +47,7 @@ export function modalityForFile(file: File): "image" | "video" | "audio" | "text
 export async function inspectMedia(file: File): Promise<ComplianceReport> {
   const form = new FormData();
   form.append("file", file);
+  form.append("profile", "auto");
   const res = await fetch("/api/v1/compliance-inspect", { method: "POST", body: form });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
@@ -56,6 +57,27 @@ export async function inspectMedia(file: File): Promise<ComplianceReport> {
       `合规检测失败（HTTP ${res.status}）`;
     throw new Error(msg);
   }
+  return res.json();
+}
+
+export async function createCompositeRepairPlan(file: File): Promise<import("./types").CompositeRepairPlan> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/v1/composite-repair-plans", { method: "POST", body: form });
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error?.message || "无法生成修复方案");
+  return res.json();
+}
+
+export async function confirmCompositeRepair(planId: string, planHash: string): Promise<{
+  validation?: { post_repair_conclusion?: string };
+  links: { output: string };
+}> {
+  const res = await fetch("/api/v1/composite-repair-jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plan_id: planId, plan_hash: planHash, confirmed: true, operator_label: "合规检测页" }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.error?.message || "修复执行失败");
   return res.json();
 }
 

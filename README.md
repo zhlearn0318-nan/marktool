@@ -10,12 +10,12 @@ AIGC 文件元数据标注、检测与修复平台。仓库包含 React 前端�
 | MP4 | 支持 | 支持 | 按修复计划执行 |
 | Markdown / PDF / HTML / DOCX | 支持 | 支持 | 按修复计划执行 |
 | M4A / MP3 | 支持 | 暂未提供 | 暂未提供 |
-| 多模态组合 | 拆分、分别打标、重组后再校验 | 按每个内容文件校验 | 不走修复工作台 |
-| 虚拟场景 / 交互场景 | 显式提示 + 内容文件隐式标识 | 按第 5.5 / 5.6 条校验 | 不走修复工作台 |
+| 多模态组合 | 拆分、分别打标、重组 | 合规检测自动识别文件或结果包 | 标识损坏时可生成方案并执行 |
+| 虚拟场景 / 交互场景 | 显式提示 + 内容文件隐式标识 | 合规检测同时检查显式提示 | 隐式标识损坏时可修复 |
 
 修复需先生成计划、查看变更并确认执行；无法安全修复的文件会被拒绝或要求人工处理。原文件保留，结果另存为新文件。音视频写入不转码，通过 ffprobe 与短片段解码检查完整性；文档和图片使用各自的内容完整性校验。
 
-单文件接口 `metadata-label-jobs`、`compliance-inspect`、`metadata-repair-*` 的行为与合并前的 main 一致。多模态和场景是这些适配器的调用方，不另写一套 M4A、MP3 或文档载体。字幕和纯文本没有对应容器，仍写在文件尾段。C2PA 互转、数字签名、AI 生成概率识别及信号层鲁棒水印不属于当前已交付能力。
+不带额外参数时，`metadata-label-jobs`、`compliance-inspect`、`metadata-repair-*` 与合并前的 main 一致。合规检测页会附带 `profile=auto`：能识别的多模态文件、结果包和场景包走同一份四档结论；识别不了的仍按单模态检测。多模态和场景的修复使用 `composite-repair-plans` / `composite-repair-jobs`，规则与单模态修复相同（相同的重复标识保留一份，损坏 JSON 和互相冲突的标识不自动挑选）。多模态页和场景页不再单独做校验，页面上的入口会转到合规检测。
 
 ## 仓库结构
 
@@ -175,6 +175,16 @@ python -m app.cli scene interactive label \
 ```
 
 MP3 成分使用与单文件打标相同的 ID3 `TXXX:AIGC`，不再先转成 M4A。Markdown、PDF、HTML、DOCX 同样走各自已有载体。只有 `.txt`、`.vtt`、`.srt` 使用尾段。
+
+已有结果的复核在前端「合规检测」。接口是同一个 `POST /api/v1/compliance-inspect`，表单增加 `profile=auto`。可自动修复时，前端再调用：
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| POST | `/api/v1/composite-repair-plans` | 为多模态或场景包生成修复方案 |
+| POST | `/api/v1/composite-repair-jobs` | 确认后执行，返回复检结论 |
+| GET | `/api/v1/composite-repair-jobs/{job_id}/output` | 下载修复后的文件 |
+
+演示录屏脚本在 `scripts/demo/demo_script.py`，说明见 `scripts/demo/README.md`。
 
 ## 验证
 

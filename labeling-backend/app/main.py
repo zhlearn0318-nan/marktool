@@ -138,6 +138,8 @@ def create_app(settings: Settings | None = None,
     # 修复工作台（计划 → 显式确认 → 异步执行 → 审计）。路径独立，与标注/检测不冲突。
     app.include_router(repair_routes.router)
     app.include_router(composite_routes.router)
+    from .api import composite_repair
+    app.include_router(composite_repair.router)
     return app
 
 

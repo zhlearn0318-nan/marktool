@@ -3,7 +3,7 @@ import { Alert, Input, Select, Upload, message } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
 import ToolSteps from "../components/ToolSteps";
-import { downloadComposite, labelMultimodal, verifyMultimodal } from "../api";
+import { downloadComposite, labelMultimodal } from "../api";
 import type { ClauseCheck, SceneReport } from "../types";
 
 const FIELD: React.CSSProperties = {
@@ -26,12 +26,10 @@ function Checks({ items }: { items: ClauseCheck[] }) {
 
 export default function MultimodalPage() {
   const [file, setFile] = useState<File | null>(null);
-  const [verifyFile, setVerifyFile] = useState<File | null>(null);
   const [producer, setProducer] = useState("ORG_1565201000000016");
   const [label, setLabel] = useState("1");
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<SceneReport | null>(null);
-  const [verifyReport, setVerifyReport] = useState<SceneReport | null>(null);
 
   async function submit() {
     if (!file) {
@@ -64,19 +62,6 @@ export default function MultimodalPage() {
     }
   }
 
-  async function verify() {
-    if (!verifyFile) return;
-    setBusy(true);
-    setVerifyReport(null);
-    try {
-      setVerifyReport(await verifyMultimodal(verifyFile));
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <>
       <PageBanner
@@ -86,7 +71,7 @@ export default function MultimodalPage() {
       />
       <section className="section">
         <ToolSteps
-          items={["上传复合内容", "拆分打标并校验", "下载或复核"]}
+          items={["上传复合内容", "拆分打标", "到合规检测复核"]}
           active={report?.passed ? 2 : busy ? 1 : 0}
         />
         <div className="grid-2" style={{ alignItems: "start" }}>
@@ -182,31 +167,15 @@ export default function MultimodalPage() {
         <div className="ui-card" style={{ marginTop: 22 }}>
           <div className="ui-card-head">
             <span className="ico">⌕</span>
-            <h3>解析与校验已有结果</h3>
+            <h3>复核已有结果</h3>
           </div>
           <div className="ui-card-body">
-            <Upload
-              maxCount={1}
-              beforeUpload={(item) => {
-                setVerifyFile(item);
-                return false;
-              }}
-              showUploadList={false}
-            >
-              <button className="btn-ghost-light" type="button">选择结果包或媒体文件</button>
-            </Upload>
-            {verifyFile ? <span style={{ marginLeft: 12 }}>{verifyFile.name}</span> : null}
-            <button className="btn-gold" style={{ marginLeft: 12 }} disabled={!verifyFile || busy} onClick={verify}>
-              校验
+            <p style={{ marginTop: 0, color: "var(--text-600)" }}>
+              重复标识、字段缺失和损坏 JSON 的诊断与修复放在合规检测里，和单模态使用同一套结论。
+            </p>
+            <button className="btn-ghost-light" type="button" onClick={() => { window.location.hash = "mediaInspect"; }}>
+              打开合规检测
             </button>
-            {verifyReport ? (
-              <Alert
-                style={{ marginTop: 14 }}
-                type={verifyReport.passed ? "success" : "warning"}
-                showIcon
-                message={verifyReport.passed ? "校验通过" : "校验未通过"}
-              />
-            ) : null}
           </div>
         </div>
       </section>

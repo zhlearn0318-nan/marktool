@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import time
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from ..adapters import AdapterError
@@ -43,6 +43,7 @@ async def inspect_media(
         req_request: Request,
         file: UploadFile = File(description="JPEG / PNG / MP4 / Markdown / PDF / HTML / DOCX 文件"
                                             "（只读检测，不改动原文件）"),
+        profile: str | None = Form(default=None),
         settings: Settings = Depends(get_settings),
         storage: FileStorage = Depends(get_storage),
 ):
@@ -51,6 +52,39 @@ async def inspect_media(
     # ---- 头部探测真实类型（§9.1 第 3 步，不信任扩展名）----
     head = await file.read(SNIFF_BYTES)
     mime = await detect_upload_mime(file, head)
+    # profile=auto 才识别多模态和场景。不带该字段时，无法识别的文件仍是 415，
+    # 单模态文件仍走原来的检测器。
+    if profile == "auto" and (mime is None or mime == "video/mp4"):
+        stored_early = storage.new_stored_name(".bin" if mime is None else suffix_for_mime(mime))
+        early_path = storage.original_path(stored_early)
+        early_hash = hashlib.sha256(head)
+        early_size = len(head)
+        try:
+            with open(early_path, "wb") as handle:
+                handle.write(head)
+                while chunk := await file.read(1 << 20):
+                    handle.write(chunk)
+                    early_hash.update(chunk)
+                    early_size += len(chunk)
+            if early_size > settings.storage.max_file_bytes:
+                raise ApiError(413, FILE_TOO_LARGE,
+                               f"文件超过大小上限（{settings.storage.max_file_bytes // (1024 * 1024)} MB）。")
+            from ..composite.compliance import classify_upload, inspect_composite
+            from ..tools import tools_from_settings
+            if classify_upload(early_path) is not None:
+                return await run_in_threadpool(
+                    inspect_composite, early_path,
+                    file_name=file.filename or "upload",
+                    size_bytes=early_size, sha256=early_hash.hexdigest(),
+                    request_id=request_id, tools=tools_from_settings(settings),
+                )
+        except ApiError:
+            raise
+        finally:
+            storage.discard(early_path)
+        await file.seek(0)
+        head = await file.read(SNIFF_BYTES)
+        mime = await detect_upload_mime(file, head)
     if mime is None:
         raise ApiError(415, UNSUPPORTED_MEDIA_TYPE,
                        "无法识别的文件格式，合规检测支持 JPEG、PNG、MP4、"

@@ -3,13 +3,14 @@ import { Alert, Collapse, Tag, Upload, message } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
 import ToolSteps from "../components/ToolSteps";
-import { getHealth, inspectMedia } from "../api";
+import { confirmCompositeRepair, createCompositeRepairPlan, getHealth, inspectMedia } from "../api";
 import { C2PA_ZH, MEDIA_STATUS_ZH, REASON_ZH, REPAIR_ZH } from "../reasonCodes";
 import type {
   ComplianceCandidate,
   ComplianceConclusion,
   ComplianceIssue,
   ComplianceReport,
+  CompositeRepairPlan,
 } from "../types";
 
 const CONCLUSION_META: Record<
@@ -48,7 +49,7 @@ const SEVERITY_TAG: Record<string, "error" | "warning" | "default"> = {
 const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png", "text/markdown",
   "application/pdf", "text/html",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
-const ACCEPT = ".mp4,.jpg,.jpeg,.png,.md,.markdown,.pdf,.html,.htm,.docx";
+const ACCEPT = ".mp4,.jpg,.jpeg,.png,.md,.markdown,.pdf,.html,.htm,.docx,.zip";
 
 function chip(label: string, value: string | undefined | null, color?: string) {
   return value ? <Tag color={color}>{label}: {value}</Tag> : null;
@@ -118,6 +119,8 @@ export default function MediaInspectPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<ComplianceReport | null>(null);
+  const [repairPlan, setRepairPlan] = useState<CompositeRepairPlan | null>(null);
+  const [repairing, setRepairing] = useState(false);
 
   useEffect(() => {
     getHealth()
@@ -127,17 +130,56 @@ export default function MediaInspectPage() {
 
   async function submit() {
     if (!file) {
-      message.warning("请先选择待检测的文件（MP4 / JPEG / PNG / Markdown / PDF / HTML / DOCX）");
+      message.warning("请先选择待检测的文件");
       return;
     }
     setLoading(true);
     setReport(null);
     try {
+      setRepairPlan(null);
       setReport(await inspectMedia(file));
     } catch (e) {
       message.error((e as Error).message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function planRepair() {
+    if (!file) return;
+    setRepairing(true);
+    try {
+      setRepairPlan(await createCompositeRepairPlan(file));
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRepairing(false);
+    }
+  }
+
+  async function runRepair() {
+    if (!file || !repairPlan) return;
+    setRepairing(true);
+    try {
+      const job = await confirmCompositeRepair(repairPlan.plan_id, repairPlan.plan_hash);
+      const output = await fetch(job.links.output);
+      if (!output.ok) throw new Error("无法下载修复结果");
+      const blob = await output.blob();
+      const repaired = new File([blob], `repaired-${file.name}`, { type: file.type });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = repaired.name;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setFile(repaired);
+      setRepairPlan(null);
+      setReport(await inspectMedia(repaired));
+      message.success("已下载修复结果，并完成复检");
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRepairing(false);
     }
   }
 
@@ -165,7 +207,7 @@ export default function MediaInspectPage() {
       <PageBanner
         eyebrow="COMPLIANCE · 图片 / 视频 / 文本"
         title="合规检测"
-        sub="检查图片、视频或文档中的 AIGC 标识，查看字段问题与处理建议。检测过程不会修改原文件。"
+        sub="检查单模态文件、多模态文件或结果包、虚拟场景包和交互场景包。自动识别类型，检测过程不修改原文件。"
       />
 
       <section className="section">
@@ -202,9 +244,9 @@ export default function MediaInspectPage() {
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽文件到此处（MP4 / JPEG / PNG / Markdown / PDF / HTML / DOCX）</p>
+                <p className="ant-upload-text">点击或拖拽文件到此处</p>
                 <p className="ant-upload-hint">
-                  单文件 · 按文件内容判定真实格式 · 只读检测不修改文件
+                  单模态文件、多模态 MP4 / 结果包、虚拟场景包或交互场景包。按内容识别，不修改原文件。
                 </p>
               </Upload.Dragger>
 
@@ -322,6 +364,44 @@ export default function MediaInspectPage() {
                       )}
                     </div>
                   )}
+
+                  {report.subject ? (
+                    <div style={{ marginTop: 12, fontSize: 13, color: "var(--text-600)" }}>
+                      识别为 <strong style={{ color: "var(--ink-900)" }}>{report.subject.label}</strong>
+                      。每个内容文件单独判断隐式标识；场景包同时检查显式提示。
+                    </div>
+                  ) : null}
+                  {report.units && report.units.length > 0 ? (
+                    <div style={{ marginTop: 10 }}>
+                      {report.units.map((unit) => (
+                        <div key={unit.name} style={{ fontSize: 13, padding: "4px 0", color: "var(--text-600)" }}>
+                          <strong>{unit.name}</strong> · {CONCLUSION_META[unit.conclusion]?.label ?? unit.conclusion}
+                          · {unit.record_count} 份隐式标识
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {report.subject && report.repairability === "auto_fixable" && file ? (
+                    <div style={{ marginTop: 12 }}>
+                      <button className="btn-gold" disabled={repairing} onClick={() => void planRepair()}>
+                        {repairing ? "正在处理…" : "生成修复方案"}
+                      </button>
+                      {repairPlan ? (
+                        <div style={{ marginTop: 10, fontSize: 13, color: "var(--text-600)" }}>
+                          {repairPlan.repair_plan.executable
+                            ? repairPlan.repair_plan.actions.join("；")
+                            : repairPlan.repair_plan.blocking_reasons.join("；")}
+                          {repairPlan.repair_plan.executable ? (
+                            <div>
+                              <button className="btn-gold" style={{ marginTop: 8 }} disabled={repairing} onClick={() => void runRepair()}>
+                                确认执行并复检
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 8 }}>
                     {chip("置信度", report.confidence === "high" ? "高" : "低")}

@@ -319,6 +319,31 @@ export interface ComplianceReport {
   detector_version: string;
   exiftool_version: string | null;
   elapsed_ms: number;
+  /** 仅多模态 / 场景自动识别时出现。单模态报告没有这块。 */
+  subject?: {
+    kind: string;
+    label: string;
+  };
+  units?: {
+    name: string;
+    role: string;
+    conclusion: ComplianceConclusion;
+    reason_code?: string | null;
+    record_count: number;
+    issues: ComplianceIssue[];
+  }[];
+}
+
+export interface CompositeRepairPlan {
+  plan_id: string;
+  plan_hash: string;
+  repair_plan: {
+    executable: boolean;
+    repairability: string;
+    actions: string[];
+    blocking_reasons: string[];
+    field_changes: { field: string; before: unknown; after: unknown; reason: string }[];
+  };
 }
 
 /* ===== 多模态与场景标识（/api/v1/multimodal、/api/v1/scenes） ===== */

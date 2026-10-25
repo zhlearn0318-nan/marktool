@@ -250,10 +250,17 @@ export default function ScenesPage() {
       <PageBanner
         eyebrow="SCENES"
         title="虚拟场景与交互场景"
-        sub="按第 5.5、5.6 条添加可感知的文字提示，并在内容文件中写入恰好一份附录 E 隐式标识。"
+        sub="按第 5.5、5.6 条添加可感知的文字提示，并在内容文件中写入恰好一份附录 E 隐式标识。已有场景包的复检和修复在合规检测中完成。"
       />
       <section className="section">
         <ToolSteps items={["填写显式提示", "写入并校验", "下载场景包"]} active={0} />
+        <p style={{ color: "var(--text-600)" }}>
+          要检查已有场景包是否重复、缺字段或显式提示不合规，请到
+          <button className="btn-ghost-light" type="button" style={{ marginLeft: 8 }}
+            onClick={() => { window.location.hash = "mediaInspect"; }}>
+            合规检测
+          </button>
+        </p>
         <Tabs
           items={[
             { key: "virtual", label: "虚拟场景", children: <VirtualPane /> },
