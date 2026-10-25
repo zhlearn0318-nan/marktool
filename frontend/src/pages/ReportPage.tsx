@@ -67,10 +67,10 @@ export default function ReportPage({
   const stampedAt = new Date().toLocaleString("zh-CN");
 
   function share() {
-    const url = window.location.href;
+    const url = JSON.stringify(data, null, 2);
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(url).then(
-        () => message.success("报告链接已复制到剪贴板"),
+        () => message.success("报告内容已复制到剪贴板"),
         () => message.info(url)
       );
     } else {
@@ -81,13 +81,13 @@ export default function ReportPage({
   const actions: { label: string; fn: () => void }[] = [
     { label: "导出 PDF 报告", fn: () => window.print() },
     { label: "打印", fn: () => window.print() },
-    { label: "分享链接", fn: share },
-    { label: "加入区块链存证", fn: () => setAttestOpen(true) },
+    { label: "复制报告摘要", fn: share },
+    { label: "查看存证演示", fn: () => setAttestOpen(true) },
   ];
 
   return (
     <div style={{ maxWidth: "var(--maxw)", margin: "0 auto", padding: "32px 28px 8px" }}>
-      {/* ===== Report header ===== */}
+      <h1>图片检测报告</h1>
       <div
         className="reveal"
         style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 22 }}
@@ -201,14 +201,14 @@ export default function ReportPage({
 
       {/* ===== Provenance ===== */}
       <div className="reveal d3">
-        <Section title="标识溯源" icon="⛓">
+        <Section title="标识溯源" icon="↗">
           <ProvenanceChain nodes={report.provenance} />
         </Section>
       </div>
 
       {/* ===== Tamper + AI ===== */}
       <div className="reveal d4" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-        <Section title="篡改检测" icon="🛡">
+        <Section title="篡改检测" icon="◇">
           {report.tamper.findings.length ? (
             report.tamper.findings.map((f, i) => (
               <div

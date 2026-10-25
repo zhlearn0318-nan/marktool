@@ -1,156 +1,152 @@
-# AIGC 标识合规平台（MarkTool）
+# 源迹 TraceMark（MarkTool）
 
-本仓库面向 GB 45438—2025 文件元数据隐式标识，包含图片检测/报告原型（后端 + 前端），以及视频（MP4）后端元数据打标服务。**视频（MP4）打标模块为 feature/video-metadata 分支交付物**：后端接口与前端打标页均已实现并已打通；图片适配器由队友负责。
+AIGC 文件元数据标注、检测与修复平台。仓库包含 React 前端、图片检测/报告服务，以及统一的多格式元数据服务。当前实现围绕 GB 45438—2025 的七字段标识结构，支持在文件副本上写入标识、回读校验、检查内容完整性和下载结果。
 
-## 当前实现范围
+## 当前能力
 
-| 能力 | 状态 | 说明 |
-|---|---|---|
-| 视频（MP4）AIGC 元数据打标 | 已实现 | ExifTool 写入 `XMP-aigc:AIGC`，不转码，输出 `carrier = mp4-aigc-v1` |
-| 已有标识 `reject` / `replace` | 已实现 | 全标签扫描（含旧载体 `QuickTime:Comment`）；`reject` → 409，`replace` → 整体移除 |
-| 七字段严格 Schema | 已实现 | 外层 `AIGC`、七字段必填（含 `ReservedCode1/2`）、`Label` 枚举、未知字段拒绝 |
-| 媒体完整性校验 | 已实现 | ffprobe 对比写入前后的时长/分辨率/轨道/编解码器，ffmpeg 解码前 2 秒确认可播放 |
-| 异步任务与持久化 | 已实现 | `/api/v1` 异步创建/查询/下载，SQLite 登记 + 原子发布 + 保留策略 |
-| MP4 合规检测（详细诊断） | 已实现 | `/api/v1/compliance-inspect`：只读检测 → 合规/不合规/未检出/无法判定四档；多份标识逐字段对比（`FIELDS_DISAGREE`）、损坏定位（`METADATA_REGION_WIPED` 点名原子偏移、`BAD_JSON` 截断到字段值段）、每条候选记录带 `location` 载体物理位置 |
-| 图片 XMP 检测与合规评级（MVP） | 已实现 | `/api/detect` 全量检测 → 报告（A / B / C / 不合规） |
-| 前端（源迹 TraceMark）· 检测/报告 | 已实现 | Vite + React + Antd，接入 `/api/detect` 上传检测与报告页 |
-| 视频打标前端页面 | 已实现 | 「视频打标」页：上传 MP4 → 创建任务 → 轮询进度 → 下载结果（接入 `/api/v1`，ProduceID 自动生成） |
-| 视频合规检测前端页面 | 已实现 | 「视频合规检测」页：上传 MP4 → 结论四档 + 问题清单 + AIGC 候选（含 `location`）+ 原始 JSON（接入 `/api/v1/compliance-inspect`） |
-| 图片（JPEG/PNG）打标适配器 | 未实现 | 队友交付；能力开关 `false`，前端据此禁用图片入口 |
-| C2PA 互转、概率检测、数字签名 | 不在本阶段 | 首期只做文件元数据隐式标识 |
+| 文件格式 | 元数据标注与回读 | 合规检测 | 元数据修复 |
+|---|---|---|---|
+| JPEG / PNG | 支持 | 支持 | 按修复计划执行 |
+| MP4 | 支持 | 支持 | 按修复计划执行 |
+| Markdown / PDF / HTML / DOCX | 支持 | 支持 | 按修复计划执行 |
+| M4A / MP3 | 支持 | 暂未提供 | 暂未提供 |
 
-## 关键目录
+修复需先生成计划、查看变更并确认执行；无法安全修复的文件会被拒绝或要求人工处理。原文件保留，结果另存为新文件。音视频写入不转码，通过 ffprobe 与短片段解码检查完整性；文档和图片使用各自的内容完整性校验。
+
+本版本未集成多模态拆分、虚拟场景与交互场景标识模块。C2PA 互转、数字签名、AI 生成概率识别及信号层鲁棒水印也不属于当前已交付能力。
+
+## 仓库结构
 
 ```text
-.
-├── backend/             # 检测/报告 MVP：图片 XMP 读取、探针引擎、合规评级（FastAPI）
-├── frontend/            # 源迹 TraceMark：Vite + React + Antd，上传检测/报告 + 视频打标页
-├── labeling-backend/    # 视频（MP4）元数据打标服务（本分支交付）
-│   ├── app/
-│   │   ├── adapters/video.py   # 视频适配器：MP4 写入/回读/replace/媒体完整性
-│   │   ├── core/               # 七字段模型、全标签 XMP 读取器、BMFF 探针、合规检查器（bmff/inspector）、流水线、任务存储
-│   │   ├── api/                # /api/v1 异步标注接口 + compliance-inspect 合规检测
-│   │   └── config/             # ExifTool XMP-aigc 自定义命名空间配置
-│   └── docs/                   # 视频载体验证记录、手册要点提炼
-├── docs/                 # 开发手册与方案设计
-└── LICENSE
+backend/                         图片检测与历史报告服务（/api，端口 8000）
+frontend/                        TraceMark 前端（Vite + React + TypeScript）
+labeling-backend/                 多格式标注、检测与修复服务（/api/v1，端口 8002）
+  app/adapters/                  视频、音频和文档适配器
+  app/metadata/                  图片适配器、文档载体、编号登记和修复模块
+  app/core/                      共享校验、任务流水线、存储和检测器
+  config/                        默认配置与 ExifTool 命名空间配置
+  tests/                         单元测试与真实文件集成测试
+docs/                            开发手册和设计资料
+start-local.ps1                  Windows 本地启动入口
+start-local.config.example.psd1  可选的本机工具路径配置示例
+启动最新版.bat                    Windows 双击启动入口
 ```
 
 ## 环境准备
 
-两个后端服务各自独立安装依赖。以下命令同时给出 macOS/Linux 与 Windows（PowerShell）两种写法。
+需要 Python 3.10+、Node.js 18+、ExifTool、FFmpeg（含 ffprobe）。ExifTool 和 FFmpeg 应加入 PATH；ExifTool 也可通过 `EXIFTOOL_PATH` 指定。运行时、依赖包及外部工具不随仓库提交。
 
-### 检测/报告 MVP（backend）
-
-```bash
-# macOS / Linux
-cd backend
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
+Windows PowerShell，在仓库根目录安装依赖：
 
 ```powershell
-# Windows PowerShell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+python -m venv .local-runtime
+.\.local-runtime\Scripts\python.exe -m pip install -r backend/requirements.txt -r labeling-backend/requirements.txt
+Set-Location frontend
+npm ci
+Set-Location ..
 ```
 
-### 视频打标服务（labeling-backend）
+macOS / Linux：
 
 ```bash
-# macOS / Linux
-cd labeling-backend
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+python3 -m venv .local-runtime
+.local-runtime/bin/python -m pip install -r backend/requirements.txt -r labeling-backend/requirements.txt
+(cd frontend && npm ci)
 ```
+
+## 启动
+
+### Windows 一键启动
+
+安装依赖并准备好外部工具后，双击 `启动最新版.bat`，或运行：
 
 ```powershell
-# Windows PowerShell
-cd labeling-backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-local.ps1
+# 只启动服务：
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-local.ps1 -NoBrowser
 ```
 
-> 视频打标服务需系统已装 ExifTool、ffprobe、ffmpeg。ExifTool 若不在 PATH 中，可设置环境变量 `EXIFTOOL_PATH`；开发环境默认数据/任务目录为各服务下的 `storage/`，已被 Git 忽略。
+脚本优先使用 `.local-runtime\Scripts\python.exe`，在 PATH 中查找 Node.js 和 FFmpeg；ExifTool 还可放在 `.local-tools/exiftool/` 下。需要指定其他路径时，复制 `start-local.config.example.psd1` 为 `start-local.config.psd1` 并填写。该本机配置不会提交到 Git。
 
-## 运行
+脚本在后台启动三个服务，检测到健康的现有服务时直接复用。日志位于根目录的 `backend-local.*.log`、`labeling-local.*.log` 和 `frontend-local.*.log`。修改后端代码后需先停止对应服务再重新启动。
 
-### 视频打标服务（`/api/v1`）
+### 手动启动
+
+在三个终端分别运行；以下为 macOS / Linux 写法，Windows 将 Python 路径换为 `..\.local-runtime\Scripts\python.exe`：
 
 ```bash
-# macOS / Linux
-cd labeling-backend
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8002
-```
-
-```powershell
-# Windows PowerShell
-cd labeling-backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8002
-```
-
-### 检测/报告 MVP（`/api`）
-
-```bash
-# macOS / Linux
+# 终端一
 cd backend
-.venv/bin/uvicorn app.main:app --reload --port 8000
+../.local-runtime/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
-
-```powershell
-# Windows PowerShell
-cd backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-```
-
-### 前端（源迹 TraceMark）
 
 ```bash
+# 终端二
+cd labeling-backend
+../.local-runtime/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8002
+```
+
+```bash
+# 终端三
 cd frontend
-npm install
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-> npm 命令在 macOS / Windows 下通用。前端监听 `http://localhost:5173`，代理规则：`/api` → 后端 `:8000`（检测 MVP），`/api/v1` → 后端 `:8002`（视频打标）。
+访问 http://127.0.0.1:5173/ 。开发前端将 `/api/v1` 转发至 8002，将 `/api` 转发至 8000。生产静态部署需配置同样的反向代理；`npm run build` 仅生成前端文件，不启动后端。
 
 ## API
 
-| 方法 | 路径 | 说明 |
+| 方法 | 路径 | 用途 |
 |---|---|---|
-| `POST` | `/api/v1/metadata-label-jobs` | 创建视频打标任务（`multipart`: `file` + `request`），返回 `202` |
-| `GET` | `/api/v1/metadata-label-jobs/{job_id}` | 查询任务状态/阶段/校验结果 |
-| `GET` | `/api/v1/metadata-label-jobs/{job_id}/output` | 下载打标结果文件（仅 `succeeded`） |
-| `GET` | `/api/v1/health` | 健康检查 + 能力列表（`video/mp4: true`） |
-| `POST` | `/api/v1/compliance-inspect` | MP4 合规检测（`multipart`: `file`，只读）：同步返回 `conclusion`/`reason_code`/`issues`/`candidates`（候选带 `location`）/`bmff` 等 |
-| `POST` | `/api/detect` | 上传图片，全量检测，返回合规报告（MVP） |
-| `GET` | `/api/report/{id}` | 查询历史检测报告（MVP） |
-| `GET` | `/api/health` | 健康检查（MVP） |
+| POST | `/api/v1/metadata-label-jobs` | 上传文件与标注请求，创建异步任务 |
+| GET | `/api/v1/metadata-label-jobs/{job_id}` | 查询状态与校验结果 |
+| GET | `/api/v1/metadata-label-jobs/{job_id}/output` | 下载标注文件 |
+| POST | `/api/v1/compliance-inspect` | 只读检查图片、视频或文档 |
+| POST | `/api/v1/metadata-repair-plans` | 生成修复计划 |
+| GET | `/api/v1/metadata-repair-plans/{plan_id}` | 查询修复计划 |
+| POST | `/api/v1/metadata-repair-jobs` | 确认计划，创建修复任务 |
+| GET | `/api/v1/metadata-repair-jobs/{job_id}` | 查询修复结果 |
+| GET | `/api/v1/metadata-repair-jobs/{job_id}/output` | 下载修复文件 |
+| GET | `/api/v1/health` | 元数据服务健康状态和能力列表 |
+| POST | `/api/detect` | 旧版图片报告入口 |
+| GET | `/api/report/{id}` | 查询图片检测报告 |
+| GET | `/api/health` | 图片报告服务健康检查 |
 
-> **联调状态**：前端 TraceMark 已接通视频打标与合规检测——顶部导航「视频打标」页上传 MP4 → `/api/v1/metadata-label-jobs` 创建任务 → 自动轮询进度 → 下载打标结果；「视频合规检测」页上传 MP4 → `/api/v1/compliance-inspect` 同步返回详细诊断报告。`/api/v1` 经 vite 代理转发至 `:8002`（labeling-backend），`/api` 转发至 `:8000`（检测 MVP），两个服务可同时运行。
+请求示例见 [元数据服务说明](labeling-backend/README.md)。运行后的交互文档分别为 http://127.0.0.1:8002/docs 和 http://127.0.0.1:8000/docs 。
 
-## 测试
+## 验证
 
-```bash
-# macOS / Linux
-cd backend && .venv/bin/python -m pytest -q                      # 32 个用例
-cd labeling-backend && .venv/bin/python -m pytest tests/ -q      # 89 个用例
-```
+Windows，从仓库根目录分别执行：
 
 ```powershell
-# Windows PowerShell
-cd backend; .\.venv\Scripts\python.exe -m pytest -q
-cd labeling-backend; .\.venv\Scripts\python.exe -m pytest tests/ -q
+Set-Location backend
+..\.local-runtime\Scripts\python.exe -m pytest -q
+Set-Location ../labeling-backend
+$env:AIGC_REQUIRE_TOOLS = '1'
+..\.local-runtime\Scripts\python.exe -m pytest tests -q
+Set-Location ../frontend
+npm run build
 ```
 
-> labeling-backend 的视频打标集成测试依赖 ExifTool / ffprobe / ffmpeg，需先安装。
+macOS / Linux：
 
-## 文档
+```bash
+(cd backend && ../.local-runtime/bin/python -m pytest -q)
+(cd labeling-backend && AIGC_REQUIRE_TOOLS=1 ../.local-runtime/bin/python -m pytest tests -q)
+(cd frontend && npm run build)
+```
 
-- 开发手册：`docs/gb45438-metadata-labeling-development-guide.md`
-- 视频模块要点：`labeling-backend/docs/guide-keypoints.md`、`labeling-backend/docs/mp4-carrier-validation.md`
-- 完整接口契约与 `request` 示例：`labeling-backend/README.md`
+完整验收需安装 ExifTool、ffmpeg 和 ffprobe。`AIGC_REQUIRE_TOOLS=1` 将测试跳过视为失败，避免缺失工具时把局部测试误记为完整通过。
+
+## 配置与资料
+
+- [元数据服务配置](labeling-backend/config/default_config.yaml)
+- [GB 45438 元数据标注开发指南](docs/gb45438-metadata-labeling-development-guide.md)
+- 载体验证：[MP4](labeling-backend/docs/mp4-carrier-validation.md)、[M4A](labeling-backend/docs/m4a-carrier-validation.md)、[MP3](labeling-backend/docs/mp3-carrier-validation.md)
+- [前端静态素材来源](frontend/public/assets/README.md)
+
+仓库只包含源码、必要文档和界面资源。上传文件、任务数据库、测试产物、日志、本机路径配置和虚拟环境均保留在本地。
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。
+项目代码采用 [MIT License](LICENSE)。第三方字体、图片及依赖遵循各自许可，来源见上述素材说明。

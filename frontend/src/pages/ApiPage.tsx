@@ -95,10 +95,14 @@ export default function ApiPage() {
       <PageBanner
         eyebrow="DEVELOPER API"
         title="开发者 API"
-        sub="源迹 TraceMark 以 REST API 暴露检测能力，可直接集成到你的发布流水线。以下为当前 MVP 已实现的接口。"
+        sub="把标注、检测与修复接入内容工作流。查看交互式接口文档，或从图片检测示例开始。"
       />
 
       <section className="section">
+        <div className="api-doc-links">
+          <a className="tm-button primary" href="http://127.0.0.1:8002/docs" target="_blank" rel="noreferrer">标注、检测与修复接口 ↗</a>
+          <a className="tm-button secondary" href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">图片报告接口 ↗</a>
+        </div>
         <div className="grid-2" style={{ alignItems: "start", marginBottom: 28 }}>
           <div>
             <Endpoint method="GET" path="/api/health" desc="健康检查，返回服务状态。" >

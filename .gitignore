@@ -16,3 +16,22 @@ backend/sample_*.png
 /output.md
 /启动网页.bat
 /第三章_产品与研发(1).docx
+
+# Local deployment runtime, downloaded tools and browser verification output
+/.local-runtime/
+/.local-tools/
+/storage/
+
+# Private environment files and machine-specific launch settings
+.env
+.env.*
+!.env.example
+/start-local.config.psd1
+
+# Local verification records (keep them on this computer)
+/本地部署测试报告_*.md
+.coverage
+htmlcov/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

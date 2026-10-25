@@ -12,6 +12,7 @@ import {
 } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
+import ToolSteps from "../components/ToolSteps";
 import {
   confirmRepairPlan,
   createRepairPlan,
@@ -39,7 +40,7 @@ import type { View } from "../nav";
 
 /** 与后端修复台的格式闸门一致：图片走像素指纹，视频走流签名，文本走正文/结构指纹。
  *  三种模态共用同一套"计划 → 确认 → 执行 → 复检"流程，判定逻辑不分叉。 */
-const ACCEPT = ".jpg,.jpeg,.png,.mp4,.md,.pdf,image/jpeg,image/png,video/mp4,text/markdown,application/pdf";
+const ACCEPT = ".jpg,.jpeg,.png,.mp4,.md,.markdown,.pdf,.html,.htm,.docx";
 
 const STAGE_ZH: Record<string, string> = {
   queued: "排队中",
@@ -351,17 +352,18 @@ export default function RepairPage({ onNavigate }: { onNavigate?: (v: View) => v
       <PageBanner
         eyebrow="REPAIR · 图片 / 视频 / 文本"
         title="元数据修复工作台"
-        sub="按 GB 45438—2025 修复 AIGC 隐式标识：先查看计划，再显式确认执行。修复只改元数据、不动内容，原件保留且全程留审计。"
+        sub="为图片、视频或文档生成元数据修复计划。先查看变更，再确认执行；保留原件，修复仅调整元数据。"
       />
 
       <section className="section">
+        <ToolSteps items={['上传文件', '确认修复计划', '下载结果']} active={job?.status === 'succeeded' ? 2 : plan ? 1 : 0} />
         {serviceUp === false && (
           <Alert
             type="warning"
             showIcon
             style={{ marginBottom: 18 }}
             message="修复服务不可用"
-            description="无法连接 /api/v1（labeling-backend，端口 8002）。请先启动后端服务后再试。"
+            description="请确认本地服务已启动，稍后刷新页面重试。"
           />
         )}
 
@@ -370,7 +372,7 @@ export default function RepairPage({ onNavigate }: { onNavigate?: (v: View) => v
           <div className="ui-card">
             <div className="ui-card-head">
               <span className="ico">↑</span>
-              <h3>1 · 上传待修复文件</h3>
+              <h3>文件与来源信息</h3>
             </div>
             <div className="ui-card-body">
               <Upload.Dragger
@@ -386,7 +388,7 @@ export default function RepairPage({ onNavigate }: { onNavigate?: (v: View) => v
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽 JPEG / PNG / MP4 / Markdown / PDF 到此处</p>
+                <p className="ant-upload-text">点击或拖拽 JPEG / PNG / MP4 / Markdown / PDF / HTML / DOCX 到此处</p>
                 <p className="ant-upload-hint">单文件 · 只改元数据不改内容 · 原件保留</p>
               </Upload.Dragger>
 

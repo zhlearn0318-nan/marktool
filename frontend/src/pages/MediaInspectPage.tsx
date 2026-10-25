@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Alert, Collapse, Tag, Upload, message } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
+import ToolSteps from "../components/ToolSteps";
 import { getHealth, inspectMedia } from "../api";
 import { C2PA_ZH, MEDIA_STATUS_ZH, REASON_ZH, REPAIR_ZH } from "../reasonCodes";
 import type {
@@ -44,9 +45,10 @@ const SEVERITY_TAG: Record<string, "error" | "warning" | "default"> = {
 };
 
 /** 与后端能力表一致（§4.5 各模态共用同一套检测接口） */
-const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png"];
-const ACCEPT = ".mp4,.jpg,.jpeg,.png,.md,.markdown,.pdf,"
-  + "video/mp4,image/jpeg,image/png,text/markdown,application/pdf";
+const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png", "text/markdown",
+  "application/pdf", "text/html",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+const ACCEPT = ".mp4,.jpg,.jpeg,.png,.md,.markdown,.pdf,.html,.htm,.docx";
 
 function chip(label: string, value: string | undefined | null, color?: string) {
   return value ? <Tag color={color}>{label}: {value}</Tag> : null;
@@ -125,7 +127,7 @@ export default function MediaInspectPage() {
 
   async function submit() {
     if (!file) {
-      message.warning("请先选择待检测的文件（MP4 / JPEG / PNG / Markdown / PDF）");
+      message.warning("请先选择待检测的文件（MP4 / JPEG / PNG / Markdown / PDF / HTML / DOCX）");
       return;
     }
     setLoading(true);
@@ -161,19 +163,20 @@ export default function MediaInspectPage() {
   return (
     <>
       <PageBanner
-        eyebrow="COMPLIANCE · MP4 / JPEG / PNG / Markdown / PDF"
-        title="媒体合规检测"
-        sub="上传 MP4 / JPEG / PNG / Markdown / PDF，按 GB 45438—2025 只读检测已有 AIGC 元数据隐式标识是否合规，全程不改动文件。"
+        eyebrow="COMPLIANCE · 图片 / 视频 / 文本"
+        title="合规检测"
+        sub="检查图片、视频或文档中的 AIGC 标识，查看字段问题与处理建议。检测过程不会修改原文件。"
       />
 
       <section className="section">
+        <ToolSteps items={['上传文件', '核查元数据', '查看结论']} active={report ? 2 : loading ? 1 : 0} />
         {serviceUp === false && (
           <Alert
             type="warning"
             showIcon
             style={{ marginBottom: 18 }}
             message="合规检测服务不可用"
-            description="无法连接 /api/v1（labeling-backend，端口 8002）。请先启动后端服务（含 /api/v1/compliance-inspect 接口的版本）后再试。"
+            description="请确认本地服务已启动，稍后刷新页面重试。"
           />
         )}
 
@@ -182,14 +185,16 @@ export default function MediaInspectPage() {
           <div className="ui-card">
             <div className="ui-card-head">
               <span className="ico">↑</span>
-              <h3>1 · 上传待检测文件</h3>
+              <h3>上传待检测文件</h3>
             </div>
             <div className="ui-card-body">
               <Upload.Dragger
+                disabled={loading}
                 accept={ACCEPT}
                 maxCount={1}
                 beforeUpload={(f) => {
                   setFile(f);
+                  setReport(null);
                   return false;
                 }}
                 showUploadList={false}
@@ -197,7 +202,7 @@ export default function MediaInspectPage() {
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽文件到此处（MP4 / JPEG / PNG / Markdown / PDF）</p>
+                <p className="ant-upload-text">点击或拖拽文件到此处（MP4 / JPEG / PNG / Markdown / PDF / HTML / DOCX）</p>
                 <p className="ant-upload-hint">
                   单文件 · 按文件内容判定真实格式 · 只读检测不修改文件
                 </p>
@@ -248,7 +253,7 @@ export default function MediaInspectPage() {
           <div className="ui-card">
             <div className="ui-card-head">
               <span className="ico">◉</span>
-              <h3>2 · 合规检测报告</h3>
+              <h3>检测结论与明细</h3>
             </div>
             <div className="ui-card-body">
               {!report && (

@@ -2,17 +2,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Input, Progress, Select, Upload, message } from "antd";
 import { DownloadOutlined, InboxOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import PageBanner from "../components/PageBanner";
+import ToolSteps from "../components/ToolSteps";
 import { createLabelJob, downloadLabelJob, getHealth, getLabelJob, modalityForFile } from "../api";
 import type { LabelJobResponse } from "../types";
 
 const TERMINAL = new Set(["succeeded", "failed"]);
 
 /** 与后端能力表一致的受支持格式（§4.5 各模态共用同一套接口）
- *  文档类（Markdown / PDF）用模态 text；HTML / DOCX 由队友接入后同此一份。 */
+ *  音频用模态 audio；Markdown / PDF / HTML / DOCX 用模态 text。 */
 const SUPPORTED_MIMES = ["video/mp4", "image/jpeg", "image/png",
-                         "text/markdown", "application/pdf"];
-const ACCEPT = ".mp4,.jpg,.jpeg,.png,.md,.markdown,.pdf,"
-  + "video/mp4,image/jpeg,image/png,text/markdown,application/pdf";
+                         "audio/mp4", "audio/mpeg", "text/markdown", "application/pdf", "text/html",
+                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+const ACCEPT = ".mp4,.jpg,.jpeg,.png,.m4a,.mp3,.md,.markdown,.pdf,.html,.htm,.docx";
 
 const STAGE_ZH: Record<string, string> = {
   queued: "排队中",
@@ -69,7 +70,7 @@ export default function LabelingPage() {
 
   async function submit() {
     if (!file) {
-      message.warning("请先选择待打标的文件（MP4 / JPEG / PNG / Markdown / PDF）");
+      message.warning("请先选择待打标的文件（MP4 / JPEG / PNG / M4A / MP3 / Markdown / PDF / HTML / DOCX）");
       return;
     }
     const produceId = crypto.randomUUID().toUpperCase();
@@ -127,18 +128,19 @@ export default function LabelingPage() {
     <>
       <PageBanner
         eyebrow="LABELING"
-        title="媒体打标"
-        sub="上传 MP4 / JPEG / PNG / Markdown / PDF，按 GB 45438-2025 写入隐式标识，全程不转码、不重压像素、不改动正文。"
+        title="元数据标注"
+        sub="为图片、视频、音频或文档写入 AIGC 来源信息。保留原件，完成后下载带有标识的新文件。M4A / MP3 当前支持打标与回读校验，暂不支持合规检测及修复。"
       />
 
       <section className="section">
+        <ToolSteps items={['上传与填写', '写入并校验', '下载结果']} active={succeeded ? 2 : creating || running ? 1 : 0} />
         {serviceUp === false && (
           <Alert
             type="warning"
             showIcon
             style={{ marginBottom: 18 }}
             message="打标服务不可用"
-            description="无法连接 /api/v1（labeling-backend，端口 8002）。请先启动该服务后再试。"
+            description="请确认本地服务已启动，稍后刷新页面重试。"
           />
         )}
 
@@ -147,10 +149,11 @@ export default function LabelingPage() {
           <div className="ui-card">
             <div className="ui-card-head">
               <span className="ico">✎</span>
-              <h3>1 · 上传与打标参数</h3>
+              <h3>文件与标注信息</h3>
             </div>
             <div className="ui-card-body">
               <Upload.Dragger
+                disabled={creating || running}
                 accept={ACCEPT}
                 maxCount={1}
                 beforeUpload={(f) => {
@@ -162,7 +165,7 @@ export default function LabelingPage() {
                 <p className="ant-upload-drag-icon" style={{ color: "var(--gold-600)" }}>
                   <InboxOutlined />
                 </p>
-                <p className="ant-upload-text">点击或拖拽文件到此处（MP4 / JPEG / PNG / Markdown / PDF）</p>
+                <p className="ant-upload-text">点击或拖拽文件到此处（MP4 / JPEG / PNG / M4A / MP3 / Markdown / PDF / HTML / DOCX）</p>
                 <p className="ant-upload-hint">
                   单文件 · 视频不转码、图片不重压、文档不改正文 · 写入隐式标识
                 </p>
@@ -194,15 +197,16 @@ export default function LabelingPage() {
                   onChange={setPolicy}
                   style={{ width: "100%" }}
                   options={[
-                    { value: "reject", label: "reject · 已有标识则拒绝（返回 409）" },
-                    { value: "replace", label: "replace · 整体移除后重写" },
+                    { value: "reject", label: "保留已有标识，如已存在则停止处理" },
+                    { value: "replace", label: "替换已有标识，重新写入本次信息" },
                   ]}
                 />
               </div>
 
               <div style={{ marginTop: 14 }}>
-                <div style={FIELD_LABEL}>内容生产者编号（ContentProducer）</div>
+                <label htmlFor="label-producer" style={{ ...FIELD_LABEL, display: 'block' }}>内容生产者编号</label>
                 <Input
+                  id="label-producer"
                   value={producer}
                   onChange={(e) => setProducer(e.target.value)}
                   placeholder="ORG_..."
@@ -210,7 +214,7 @@ export default function LabelingPage() {
               </div>
 
               <div style={{ marginTop: 14 }}>
-                <div style={FIELD_LABEL}>Label 标识类别</div>
+                <div style={FIELD_LABEL}>内容标识类别</div>
                 <Select
                   value={label}
                   onChange={setLabel}
@@ -231,16 +235,16 @@ export default function LabelingPage() {
                   lineHeight: 1.6,
                 }}
               >
-                ProduceID / PropagateID 将自动生成全局唯一编号；首次写入强制传播者=生产者、传播编号=生产编号。
+                内容编号会自动生成。首次标注时，传播信息与生产信息保持一致。
               </div>
 
               <button
                 className="btn-gold"
                 onClick={submit}
-                disabled={creating || !file}
+                disabled={creating || running || !file}
                 style={{ width: "100%", marginTop: 18, opacity: creating || !file ? 0.6 : 1 }}
               >
-                {creating ? "正在创建任务…" : "开始打标"}
+                {creating ? "正在创建任务…" : running ? "正在写入标识…" : "开始标注"}
               </button>
             </div>
           </div>
@@ -249,7 +253,7 @@ export default function LabelingPage() {
           <div className="ui-card">
             <div className="ui-card-head">
               <span className="ico">↳</span>
-              <h3>2 · 任务进度与结果</h3>
+              <h3>处理进度与结果</h3>
             </div>
             <div className="ui-card-body">
               {!job && (
@@ -293,7 +297,7 @@ export default function LabelingPage() {
                     <div style={{ marginTop: 16 }}>
                       <Progress percent={job.progress ?? undefined} status="active" />
                       <div style={{ fontSize: 12, color: "var(--text-400)", marginTop: 4 }}>
-                        打标进行中，每 1.5s 自动刷新…
+                        正在处理，结果会自动更新，请稍候。
                       </div>
                     </div>
                   )}

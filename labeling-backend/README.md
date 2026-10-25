@@ -1,35 +1,12 @@
-# MarkTool 元数据标注服务（GB 45438-2025）
+# MarkTool 元数据服务
 
-依据《GB 45438—2025 网络安全技术 人工智能生成合成内容标识方法》及团队
-《gb45438-metadata-labeling-development-guide.md 开发手册》实现的后端标注服务。
+为 JPEG、PNG、MP4、M4A、MP3、Markdown、PDF、HTML 和 DOCX 提供统一的 AIGC 元数据标注接口。图片、视频与文档还支持只读合规检测及按计划确认的修复；音频当前仅支持标注、回读和完整性检查。
 
-> 文档状态：首期前后端联调基线。MP4 视频、M4A 与 MP3 音频元数据适配器已实现；图片适配器由队友开发，见下文"分工"。
+安装、外部工具与前后端启动方式见 [仓库主页](../README.md)。本服务在项目联调中使用 **8002** 端口，交互 API 文档为 http://127.0.0.1:8002/docs 。
 
-## 快速开始
+## 请求与任务流程
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-
-运行测试：
-
-```bash
-.venv/bin/python -m pytest tests/ -q
-```
-
-## 接口契约（开发手册 §7）
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/v1/metadata-label-jobs` | 创建标注任务（`multipart`: `file` + `request`），返回 `202` |
-| GET | `/api/v1/metadata-label-jobs/{job_id}` | 查询状态/阶段/结果 |
-| GET | `/api/v1/metadata-label-jobs/{job_id}/output` | 下载结果文件（仅 `succeeded`） |
-| POST | `/api/v1/compliance-inspect` | 合规检测（`multipart`: `file`，只读）：同步返回 GB45438 合规报告（`conclusion`/`reason_code`/`media_status`/…） |
-| GET | `/api/v1/health` | 健康检查 + 能力列表 |
-
-`request` 示例：
+`POST /api/v1/metadata-label-jobs` 接收 multipart 的 `file` 和 `request` 两个字段，其中 `request` 是 JSON 字符串，例如：
 
 ```json
 {
@@ -48,54 +25,62 @@ python3 -m venv .venv
 }
 ```
 
-## 架构（模块化，对应 UniMark 框架图）
+`modality` 按文件选择 `image`、`video`、`audio` 或 `text`。七字段均需提供，具体类型、枚举和长度限制由共享 Schema 校验。示例编号仅用于说明，实际任务应使用符合项目编号规则的内容编号。
 
-```
-用户 → watermark_tool（统一入口）
-        → unified_engine（= 本服务的 pipeline.py：按真实文件类型分发）
-             → 载体适配器（video.py / audio.py / image.py）
-                 → ExifTool（XMP-aigc:AIGC）/ Mutagen（MP3 ID3v2） + ffprobe（媒体完整性）
-```
+任务创建后返回 202，通过 `GET /api/v1/metadata-label-jobs/{job_id}` 查询进度；仅成功任务可通过对应的 `/output` 路径下载结果。流水线包括已有标识处理、在副本上写入、回读比对、内容完整性检查、编号登记和结果发布。
 
-- `app/core/` 共享层：`aigc.py`（七字段模型/校验/序列化）、`aigc_schema.json`（§5.7 共享 Schema）、
-  `reader.py`（全标签 AIGC 扫描，与检测器 aigc_check.py 同源）、`store.py`（SQLite 任务+审计）、
-  `storage.py`（临时写入 + 原子发布 + 随机命名）、`pipeline.py`（状态机流水线）、`worker.py`（进程内任务）。
-- `app/adapters/video.py` **视频负责人交付**：MP4 写入/回读/replace/媒体完整性。
-- `app/adapters/audio.py`：M4A、MP3 写入/回读/replace/音频完整性；使用同一套任务接口与七字段 Schema。
+`existing_metadata_policy` 可选 `reject` 或 `replace`：前者拒绝已有标识，后者先移除已有标识再写入。对受保护或无法安全修改的载体，服务会拒绝处理。
 
-## 视频模块关键决策
+## 格式与载体
 
-- **载体**：`XMP-aigc:AIGC`（ExifTool 自定义命名空间，`config/exiftool_aigc.config`），
-  写入 MP4 `moov` 区域，**不转码**。输出 `carrier = "mp4-aigc-v1"`（§6.4）。
-- **已有标识检测必须全标签扫描**：旧载体（如 `QuickTime:Comment`）里的 AIGC 也会被识别，
-  `reject` 时返回 409，`replace` 时整体移除后再写一份（§9.3）。
-- **媒体完整性**：ffprobe 对比写入前后的时长/分辨率/轨道/编解码器（§9.4），
-  再以 ffmpeg 解码前 2 秒确认结果文件可播放（§15.5.8），全程不转码。
-- **保留策略**：原文件、结果文件、任务记录保留期可配置，过期一并清理（§12.3）。
-- **读取与检测器复用**：写入后的回读校验与检测器共用 `reader.py`（§14），避免"自己写入、自己检测器不认"。
-- **检测器校准**：`AIGC项目/exif实践/aigc_check.py` 已按 §14 校准为 7 字段全必填（含 ReservedCode1/2），
-  并新增未知字段告警。
+| 格式 | 标识载体 |
+|---|---|
+| JPEG / PNG | 图片 XMP 的 AIGC 属性 |
+| MP4 | XMP-aigc:AIGC |
+| M4A | Adobe-XMP uuid box 中的 XMP-aigc:AIGC |
+| MP3 | ID3v2 的 TXXX:AIGC |
+| Markdown | YAML frontmatter 顶层 AIGC 字段 |
+| PDF | XMP 元数据 |
+| HTML | head 中的 meta[name=AIGC] |
+| DOCX | OOXML Custom XML Part |
 
-## 音频模块（M4A / MP3）
+MP3 读写使用 Mutagen，并保留无关的 ID3 帧。视频和音频通过 ffprobe 比较关键媒体属性，再用 ffmpeg 解码短片段；该检查不等于对整个文件完成解码。图片、文档采用适合其载体的内容指纹与结构校验。
 
-- **载体**：同样使用 `XMP-aigc:AIGC`，值为紧凑七字段 JSON；在验证的 M4A 中位于文件本体顶层 Adobe-XMP `uuid` box，输出 `carrier = "m4a-aigc-v1"`。
-- **完整性**：ffprobe 对比容器、时长和音频流的 codec/sample rate/channels，并用 `ffmpeg -map 0:a:0` 解码前两秒。
-- **范围**：M4A 仅支持 `/metadata-label-jobs` 打标；本阶段不支持 M4A 合规检测、模型识别、水印或 C2PA。详见 `docs/m4a-carrier-validation.md`。
+音频不进入合规检测与修复流程；例如 `/api/v1/compliance-inspect` 对 MP3 返回 415。
 
-- **MP3 载体**：文件开头 ID3v2 的 `TXXX:AIGC`，值为紧凑七字段 JSON，输出 `carrier = "mp3-id3v2-aigc-v1"`。正式读写使用 Mutagen，仅处理描述名严格等于 `AIGC` 的 TXXX，保留标题、作者、专辑、封面和其他自定义文本帧。
-- **范围**：MP3 仅支持 `/metadata-label-jobs` 打标；`/compliance-inspect` 对 MP3 返回 415。当前未承诺 MP3 模型识别、水印检测或 C2PA。详见 `docs/mp3-carrier-validation.md`。
+## 检测与修复
 
-## 分工边界
+- `POST /api/v1/compliance-inspect`：上传文件，只读返回结论、问题、候选标识与载体信息。结论分为合规、不合规、未检出、无法判定；来源登记与结构合规是不同的证据。
+- `POST /api/v1/metadata-repair-plans`：分析文件并生成可审阅的修复计划。
+- `GET /api/v1/metadata-repair-plans/{plan_id}`：读取计划。
+- `POST /api/v1/metadata-repair-jobs`：提交明确的计划确认后执行。
+- `GET /api/v1/metadata-repair-jobs/{job_id}`：查询任务和修复后的复检结果。
+- `GET /api/v1/metadata-repair-jobs/{job_id}/output`：下载成功的修复结果。
 
-- ✅ 已完成：共享核心层、视频（MP4）适配器、任务生命周期、契约测试、MP4 文件测试矩阵（33 个测试）。
-  配套文档：`docs/guide-keypoints.md`（手册重点提炼）、`docs/mp4-carrier-validation.md`（§17.3 载体验证记录）。
-- ⏳ 待队友：图片（JPEG/PNG）适配器 —— `app/adapters/image.py` 已留扩展点，
-  媒体完整性校验（可解码、宽高不变，§6.3）待补充。当前 `/api/v1/health` 返回
-  `image/jpeg: false, image/png: false`，前端据此禁用图片入口（§7.5）。
-- 首期**不在范围内**（§3.2）：C2PA 互转、AI 概率检测、数字签名、文本音频模态、批量上传。
+修复保留原文件。是否可修复由载体检查、计划和保护规则决定，并非所有损坏文件都可恢复。完整请求字段以交互 API 文档为准。
+
+## 目录与配置
+
+- `app/adapters/`：视频、音频和文档适配器。
+- `app/metadata/`：图片适配器、各文档载体、合规判断、编号登记与修复。
+- `app/core/`：七字段模型、全标签读取、检测器、任务流水线、存储与工作线程。
+- `app/api/`：标注、检测、修复和健康检查接口。
+- `config/default_config.yaml`：外部工具、存储、保留期、并发限制和能力配置。
+- `config/exiftool_aigc.config`：ExifTool 自定义 XMP 命名空间。
+- `tests/`：单元测试、接口测试和真实文件回归测试。
+
+从本目录启动时，默认运行数据保存在 `storage/`，已被 Git 忽略。不要将上传文件、数据库或本机工具复制到源码目录提交。
+
+## 测试与范围
+
+从本目录运行 `python -m pytest tests -q`；完整验收需准备外部工具并设置 `AIGC_REQUIRE_TOOLS=1`，具体环境命令见仓库主页。
+
+当前服务未集成多模态拆分、虚拟场景或交互场景模块，也未实现 C2PA 互转、数字签名或信号层鲁棒水印。
 
 ## 参考
 
-- 开发手册：`/Users/shu/Desktop/gb45438-metadata-labeling-development-guide.md`
-- 团队文档：`/Users/shu/Desktop/AIGC项目/`（元数据相关.docx、多格式AI标识元数据写入_要点整理.docx 等）
-- 国标原文：`AIGC项目/20251017_网络安全技术人工智能生成合成内容标识方法(1).pdf`（附录 E/F）
+- [共享开发手册](../docs/gb45438-metadata-labeling-development-guide.md)
+- [视频模块设计要点](docs/guide-keypoints.md)
+- [MP4 载体验证](docs/mp4-carrier-validation.md)
+- [M4A 载体验证](docs/m4a-carrier-validation.md)
+- [MP3 载体验证](docs/mp3-carrier-validation.md)

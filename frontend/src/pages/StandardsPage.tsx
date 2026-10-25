@@ -63,7 +63,7 @@ function gbToC2pa(gb: any) {
     ingredients: gb.ContentPropagator
       ? [{ title: gb.ContentPropagator, instance_id: gb.PropagateID }]
       : [],
-    signature: "⚠ 不可用：签名信任链需由原始签发方建立",
+    signature: "不可用：签名信任链需由原始签发方建立",
   };
 }
 

@@ -35,12 +35,12 @@ export interface DetectResponse {
 }
 
 /** 打标任务请求（对应 labeling-backend POST /api/v1/metadata-label-jobs 的 request 字段）
- *  modality 必须与文件真实类型一致（JPEG/PNG → image，MP4 → video，
+ *  modality 必须与文件真实类型一致（JPEG/PNG → image，MP4 → video，M4A/MP3 → audio，
  *  Markdown / PDF / HTML / DOCX → text），后端按文件头复核，
  *  不符返回 422 MODALITY_MISMATCH。 */
 export interface LabelJobRequest {
   standard: string;
-  modality: "image" | "video" | "text";
+  modality: "image" | "video" | "audio" | "text";
   existing_metadata_policy: "reject" | "replace";
   AIGC: {
     Label: string;
